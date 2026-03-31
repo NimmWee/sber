@@ -4,7 +4,11 @@ from pathlib import Path
 from typing import Mapping, Protocol
 
 from eval.metrics import compute_pr_auc
-from features.extractor import FeatureExtractor, TokenUncertaintyStat
+from features.extractor import (
+    FeatureExtractor,
+    InternalModelSignal,
+    TokenUncertaintyStat,
+)
 from inference.token_stats import TokenStatProvider
 from models.head import train_logistic_regression_head
 
@@ -41,6 +45,7 @@ class RawLabeledExample:
     response: str
     label: int
     token_stats: list[TokenUncertaintyStat] | None = None
+    internal_signal: InternalModelSignal | None = None
 
 
 class RawExampleEvaluationDataset:
@@ -84,17 +89,26 @@ class RawExampleEvaluationDataset:
             if example.label not in (0, 1):
                 raise ValueError("label must be 0 or 1")
             token_stats = example.token_stats
-            if token_stats is None and self.token_stat_provider is not None:
-                token_stats = self.token_stat_provider.collect(
+            internal_signal = example.internal_signal
+            if (
+                (token_stats is None or internal_signal is None)
+                and self.token_stat_provider is not None
+            ):
+                collected = self.token_stat_provider.collect_signals(
                     prompt=example.prompt,
                     response=example.response,
                 )
+                if token_stats is None:
+                    token_stats = collected.token_stats
+                if internal_signal is None:
+                    internal_signal = collected.internal_signal
 
             prepared_features.append(
                 self.extractor.extract(
                     prompt=example.prompt,
                     response=example.response,
                     token_stats=token_stats,
+                    internal_signal=internal_signal,
                 )
             )
             prepared_labels.append(example.label)

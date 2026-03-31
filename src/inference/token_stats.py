@@ -6,12 +6,21 @@ from typing import Any, Protocol
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from features.extractor import TokenUncertaintyStat
+from features.extractor import InternalModelSignal, TokenUncertaintyStat
 
 
 class TokenStatProvider(Protocol):
     def collect(self, prompt: str, response: str) -> list[TokenUncertaintyStat]:
         ...
+
+    def collect_signals(self, prompt: str, response: str) -> "CollectedModelSignals":
+        ...
+
+
+@dataclass(frozen=True)
+class CollectedModelSignals:
+    token_stats: list[TokenUncertaintyStat]
+    internal_signal: InternalModelSignal | None = None
 
 
 @dataclass(frozen=True)
@@ -22,6 +31,8 @@ class TransformersProviderConfig:
     torch_dtype: str = "auto"
     response_delimiter: str = "\n\n### Response:\n"
     max_memory: dict[int, str] | None = None
+    enable_internal_features: bool = False
+    selected_hidden_layers: tuple[int, ...] = (-1, -2)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "max_memory", self._normalize_max_memory(self.max_memory))
@@ -39,6 +50,8 @@ class TransformersProviderConfig:
                 "\n\n### Response:\n",
             ),
             max_memory=payload.get("max_memory"),
+            enable_internal_features=payload.get("enable_internal_features", False),
+            selected_hidden_layers=tuple(payload.get("selected_hidden_layers", [-1, -2])),
         )
 
     @property
@@ -81,6 +94,8 @@ class GigaChatProviderConfig(TransformersProviderConfig):
                 "\n\n### Response:\n",
             ),
             max_memory=payload.get("max_memory"),
+            enable_internal_features=payload.get("enable_internal_features", False),
+            selected_hidden_layers=tuple(payload.get("selected_hidden_layers", [-1, -2])),
         )
 
 
@@ -97,10 +112,13 @@ class TransformersTokenStatProvider:
         self._model = model
 
     def collect(self, prompt: str, response: str) -> list[TokenUncertaintyStat]:
+        return self.collect_signals(prompt=prompt, response=response).token_stats
+
+    def collect_signals(self, prompt: str, response: str) -> CollectedModelSignals:
         if not isinstance(prompt, str) or not isinstance(response, str):
             raise TypeError("prompt and response must be strings")
         if response == "":
-            return []
+            return CollectedModelSignals(token_stats=[], internal_signal=None)
 
         tokenizer = self._get_tokenizer()
         model = self._get_model()
@@ -111,7 +129,7 @@ class TransformersTokenStatProvider:
             response=response,
         )
         if not response_token_indices:
-            return []
+            return CollectedModelSignals(token_stats=[], internal_signal=None)
 
         input_ids = torch.tensor(
             [full_ids],
@@ -119,8 +137,12 @@ class TransformersTokenStatProvider:
             device=self._input_device_for_model(model),
         )
 
+        model_kwargs = {"input_ids": input_ids}
+        if self.config.enable_internal_features:
+            model_kwargs["output_hidden_states"] = True
+
         with torch.no_grad():
-            outputs = model(input_ids=input_ids)
+            outputs = model(**model_kwargs)
 
         logits = getattr(outputs, "logits", None)
         if logits is None:
@@ -148,7 +170,75 @@ class TransformersTokenStatProvider:
                     top1_top2_margin=top1_top2_margin,
                 )
             )
-        return stats
+        internal_signal = None
+        if self.config.enable_internal_features:
+            internal_signal = self._extract_internal_signal(
+                outputs=outputs,
+                response_token_indices=response_token_indices,
+            )
+
+        return CollectedModelSignals(token_stats=stats, internal_signal=internal_signal)
+
+    def _extract_internal_signal(
+        self,
+        *,
+        outputs: Any,
+        response_token_indices: list[int],
+    ) -> InternalModelSignal:
+        hidden_states = getattr(outputs, "hidden_states", None)
+        if hidden_states is None:
+            raise ValueError("model output must contain hidden states")
+        if not hidden_states:
+            raise ValueError("hidden states must not be empty")
+
+        selected_layers = self._select_hidden_layers(hidden_states)
+        response_vectors = selected_layers[-1][0, response_token_indices, :]
+        pooled_last_layer = response_vectors.mean(dim=0)
+
+        selected_layer_norms = [
+            float(layer[0, response_token_indices, :].mean(dim=0).norm().item())
+            for layer in selected_layers
+        ]
+        layer_disagreements = []
+        for previous_layer, current_layer in zip(selected_layers, selected_layers[1:]):
+            previous_vector = previous_layer[0, response_token_indices, :].mean(dim=0)
+            current_vector = current_layer[0, response_token_indices, :].mean(dim=0)
+            layer_disagreements.append(
+                float((current_vector - previous_vector).norm().item())
+            )
+
+        return InternalModelSignal(
+            last_layer_pooled_l2=float(pooled_last_layer.norm().item()),
+            last_layer_pooled_mean_abs=float(
+                pooled_last_layer.abs().mean().item()
+            ),
+            selected_layer_norm_variance=float(
+                self._variance(selected_layer_norms)
+            ),
+            layer_disagreement_mean=float(
+                sum(layer_disagreements) / len(layer_disagreements)
+                if layer_disagreements
+                else 0.0
+            ),
+        )
+
+    def _select_hidden_layers(
+        self,
+        hidden_states: tuple[torch.Tensor, ...],
+    ) -> list[torch.Tensor]:
+        resolved_indices: list[int] = []
+        for layer_index in self.config.selected_hidden_layers:
+            resolved_index = layer_index
+            if layer_index < 0:
+                resolved_index = len(hidden_states) + layer_index
+            if resolved_index < 0 or resolved_index >= len(hidden_states):
+                continue
+            if resolved_index not in resolved_indices:
+                resolved_indices.append(resolved_index)
+
+        if not resolved_indices:
+            raise ValueError("selected hidden layers are out of range")
+        return [hidden_states[index] for index in resolved_indices]
 
     def _prepare_model_inputs(
         self,
@@ -269,6 +359,13 @@ class TransformersTokenStatProvider:
     @staticmethod
     def _uses_dispatched_model(model: Any) -> bool:
         return bool(getattr(model, "hf_device_map", None))
+
+    @staticmethod
+    def _variance(values: list[float]) -> float:
+        if not values:
+            return 0.0
+        mean = sum(values) / len(values)
+        return sum((value - mean) ** 2 for value in values) / len(values)
 
 
 class GigaChatTokenStatProvider(TransformersTokenStatProvider):

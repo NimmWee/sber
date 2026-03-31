@@ -12,7 +12,9 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from features.extractor import StructuralFeatureExtractor
+from features.extractor import InternalModelSignal
 from inference.token_stats import (
+    CollectedModelSignals,
     GigaChatProviderConfig,
     GigaChatTokenStatProvider,
     TransformersProviderConfig,
@@ -42,8 +44,13 @@ class FakeTokenizer:
 
 
 class FakeModelOutput:
-    def __init__(self, logits: torch.Tensor) -> None:
+    def __init__(
+        self,
+        logits: torch.Tensor,
+        hidden_states: tuple[torch.Tensor, ...] | None = None,
+    ) -> None:
         self.logits = logits
+        self.hidden_states = hidden_states
 
 
 class FakeModel:
@@ -59,7 +66,12 @@ class FakeModel:
     def eval(self):
         return self
 
-    def __call__(self, *, input_ids: torch.Tensor) -> FakeModelOutput:
+    def __call__(
+        self,
+        *,
+        input_ids: torch.Tensor,
+        output_hidden_states: bool = False,
+    ) -> FakeModelOutput:
         sequence = input_ids[0].tolist()
         vocab_size = max(sequence) + 2
         logits = torch.zeros((1, len(sequence), vocab_size), dtype=torch.float32)
@@ -67,7 +79,45 @@ class FakeModel:
             next_token_id = sequence[index + 1]
             logits[0, index, next_token_id] = 5.0
             logits[0, index, (next_token_id + 1) % vocab_size] = 4.0
-        return FakeModelOutput(logits)
+        hidden_states = None
+        if output_hidden_states:
+            hidden_size = 3
+            layer_0 = torch.zeros((1, len(sequence), hidden_size), dtype=torch.float32)
+            layer_1 = torch.tensor(
+                [
+                    [
+                        [0.10, 0.00, 0.00],
+                        [0.20, 0.00, 0.00],
+                        [0.50, 0.20, 0.00],
+                        [0.60, 0.10, 0.00],
+                    ]
+                ],
+                dtype=torch.float32,
+            )
+            layer_2 = torch.tensor(
+                [
+                    [
+                        [0.00, 0.10, 0.00],
+                        [0.00, 0.20, 0.00],
+                        [0.40, 0.30, 0.10],
+                        [0.55, 0.12, 0.08],
+                    ]
+                ],
+                dtype=torch.float32,
+            )
+            layer_3 = torch.tensor(
+                [
+                    [
+                        [0.00, 0.00, 0.10],
+                        [0.00, 0.00, 0.20],
+                        [0.60, 0.10, 0.05],
+                        [0.70, 0.08, 0.05],
+                    ]
+                ],
+                dtype=torch.float32,
+            )
+            hidden_states = (layer_0, layer_1, layer_2, layer_3)
+        return FakeModelOutput(logits, hidden_states=hidden_states)
 
 
 class OffsetAwareTokenizer:
@@ -111,6 +161,16 @@ class OffsetAwareTokenizer:
 class MalformedModel:
     def __call__(self, *, input_ids: torch.Tensor):
         return object()
+
+
+class MissingHiddenStatesModel(FakeModel):
+    def __call__(
+        self,
+        *,
+        input_ids: torch.Tensor,
+        output_hidden_states: bool = False,
+    ) -> FakeModelOutput:
+        return super().__call__(input_ids=input_ids, output_hidden_states=False)
 
 
 class FakeDispatchedModel(FakeModel):
@@ -359,6 +419,65 @@ def test_transformers_provider_output_is_compatible_with_existing_extractor() ->
     assert "token_mean_logprob" in features
     assert "token_entropy_mean" in features
     assert "token_top1_top2_margin_mean" in features
+
+
+def test_provider_collect_signals_returns_internal_signal_when_enabled() -> None:
+    provider = TransformersTokenStatProvider(
+        config=TransformersProviderConfig(
+            model_id="distilgpt2",
+            enable_internal_features=True,
+            selected_hidden_layers=(-1, -2),
+        ),
+        tokenizer=FakeTokenizer(),
+        model=FakeModel(),
+    )
+
+    collected = provider.collect_signals(prompt="hello prompt", response="world again")
+
+    assert isinstance(collected, CollectedModelSignals)
+    assert len(collected.token_stats) == 2
+    assert collected.internal_signal is not None
+    assert collected.internal_signal.last_layer_pooled_l2 > 0.0
+    assert collected.internal_signal.selected_layer_norm_variance >= 0.0
+    assert collected.internal_signal.layer_disagreement_mean >= 0.0
+
+
+def test_provider_collect_signals_is_deterministic_and_finite() -> None:
+    provider = TransformersTokenStatProvider(
+        config=TransformersProviderConfig(
+            model_id="distilgpt2",
+            enable_internal_features=True,
+            selected_hidden_layers=(-1, -2),
+        ),
+        tokenizer=FakeTokenizer(),
+        model=FakeModel(),
+    )
+
+    first = provider.collect_signals(prompt="hello prompt", response="world again")
+    second = provider.collect_signals(prompt="hello prompt", response="world again")
+
+    assert first == second
+    assert first.internal_signal is not None
+    assert torch.isfinite(torch.tensor(first.internal_signal.last_layer_pooled_l2))
+    assert torch.isfinite(
+        torch.tensor(first.internal_signal.selected_layer_norm_variance)
+    )
+    assert torch.isfinite(torch.tensor(first.internal_signal.layer_disagreement_mean))
+
+
+def test_provider_fails_clearly_when_internal_features_are_enabled_but_hidden_states_are_missing() -> None:
+    provider = TransformersTokenStatProvider(
+        config=TransformersProviderConfig(
+            model_id="distilgpt2",
+            enable_internal_features=True,
+            selected_hidden_layers=(-1, -2),
+        ),
+        tokenizer=FakeTokenizer(),
+        model=MissingHiddenStatesModel(),
+    )
+
+    with pytest.raises(ValueError, match="hidden states"):
+        provider.collect_signals(prompt="hello prompt", response="world again")
 
 
 def test_provider_fails_clearly_on_malformed_model_output() -> None:

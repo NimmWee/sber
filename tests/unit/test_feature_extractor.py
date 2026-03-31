@@ -11,7 +11,11 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from features.extractor import StructuralFeatureExtractor, TokenUncertaintyStat
+from features.extractor import (
+    InternalModelSignal,
+    StructuralFeatureExtractor,
+    TokenUncertaintyStat,
+)
 
 
 EXPECTED_FEATURES = {
@@ -64,6 +68,13 @@ TOKEN_UNCERTAINTY_FEATURES = {
     "token_date_entropy_mean",
     "token_entity_like_logprob_mean",
     "token_entity_like_entropy_mean",
+}
+
+INTERNAL_FEATURES = {
+    "internal_last_layer_pooled_l2",
+    "internal_last_layer_pooled_mean_abs",
+    "internal_selected_layer_norm_variance",
+    "internal_layer_disagreement_mean",
 }
 
 
@@ -411,3 +422,92 @@ def test_token_uncertainty_features_are_only_present_when_enabled_and_provided()
     assert TOKEN_UNCERTAINTY_FEATURES.isdisjoint(disabled.keys())
     assert TOKEN_UNCERTAINTY_FEATURES.isdisjoint(enabled_without_stats.keys())
     assert TOKEN_UNCERTAINTY_FEATURES.issubset(enabled_with_stats.keys())
+
+
+def test_extract_with_internal_features_returns_mapping_of_float_features() -> None:
+    extractor = StructuralFeatureExtractor(enable_internal_features=True)
+
+    features = extractor.extract(
+        prompt="Who wrote Hamlet?",
+        response="William Shakespeare wrote Hamlet.",
+        internal_signal=InternalModelSignal(
+            last_layer_pooled_l2=1.25,
+            last_layer_pooled_mean_abs=0.42,
+            selected_layer_norm_variance=0.08,
+            layer_disagreement_mean=0.12,
+        ),
+    )
+
+    assert isinstance(features, Mapping)
+    assert EXPECTED_FEATURES.issubset(features.keys())
+    assert INTERNAL_FEATURES.issubset(features.keys())
+    assert all(isinstance(value, float) for value in features.values())
+
+
+def test_extract_with_internal_features_is_deterministic() -> None:
+    extractor = StructuralFeatureExtractor(enable_internal_features=True)
+    internal_signal = InternalModelSignal(
+        last_layer_pooled_l2=1.25,
+        last_layer_pooled_mean_abs=0.42,
+        selected_layer_norm_variance=0.08,
+        layer_disagreement_mean=0.12,
+    )
+
+    first = extractor.extract(
+        prompt="What is the capital of Italy?",
+        response="Rome is the capital of Italy.",
+        internal_signal=internal_signal,
+    )
+    second = extractor.extract(
+        prompt="What is the capital of Italy?",
+        response="Rome is the capital of Italy.",
+        internal_signal=internal_signal,
+    )
+
+    assert first == second
+
+
+def test_extract_with_internal_features_never_returns_nan_or_inf() -> None:
+    extractor = StructuralFeatureExtractor(enable_internal_features=True)
+
+    features = extractor.extract(
+        prompt="Summarize the treaty revision.",
+        response="The treaty was revised on 2024-03-01 and signed again in 2025.",
+        internal_signal=InternalModelSignal(
+            last_layer_pooled_l2=1.25,
+            last_layer_pooled_mean_abs=0.42,
+            selected_layer_norm_variance=0.08,
+            layer_disagreement_mean=0.12,
+        ),
+    )
+
+    assert all(math.isfinite(value) for value in features.values())
+
+
+def test_internal_features_are_only_present_when_enabled_and_provided() -> None:
+    prompt = "Who wrote Hamlet?"
+    response = "William Shakespeare wrote Hamlet."
+    internal_signal = InternalModelSignal(
+        last_layer_pooled_l2=1.25,
+        last_layer_pooled_mean_abs=0.42,
+        selected_layer_norm_variance=0.08,
+        layer_disagreement_mean=0.12,
+    )
+
+    disabled = StructuralFeatureExtractor(enable_internal_features=False).extract(
+        prompt=prompt,
+        response=response,
+        internal_signal=internal_signal,
+    )
+    enabled_without_signal = StructuralFeatureExtractor(
+        enable_internal_features=True
+    ).extract(prompt=prompt, response=response)
+    enabled_with_signal = StructuralFeatureExtractor(enable_internal_features=True).extract(
+        prompt=prompt,
+        response=response,
+        internal_signal=internal_signal,
+    )
+
+    assert INTERNAL_FEATURES.isdisjoint(disabled.keys())
+    assert INTERNAL_FEATURES.isdisjoint(enabled_without_signal.keys())
+    assert INTERNAL_FEATURES.issubset(enabled_with_signal.keys())

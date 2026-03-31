@@ -46,12 +46,22 @@ class FakeTokenizer:
 
 
 class FakeModelOutput:
-    def __init__(self, logits: torch.Tensor) -> None:
+    def __init__(
+        self,
+        logits: torch.Tensor,
+        hidden_states: tuple[torch.Tensor, ...] | None = None,
+    ) -> None:
         self.logits = logits
+        self.hidden_states = hidden_states
 
 
 class FakeModel:
-    def __call__(self, *, input_ids: torch.Tensor) -> FakeModelOutput:
+    def __call__(
+        self,
+        *,
+        input_ids: torch.Tensor,
+        output_hidden_states: bool = False,
+    ) -> FakeModelOutput:
         sequence = input_ids[0].tolist()
         vocab_size = 6
         logits = torch.zeros((1, len(sequence), vocab_size), dtype=torch.float32)
@@ -59,7 +69,45 @@ class FakeModel:
             next_token_id = sequence[index + 1]
             logits[0, index, next_token_id] = 5.0
             logits[0, index, (next_token_id + 1) % vocab_size] = 4.0
-        return FakeModelOutput(logits)
+        hidden_states = None
+        if output_hidden_states:
+            hidden_states = (
+                torch.zeros((1, len(sequence), 3), dtype=torch.float32),
+                torch.tensor(
+                    [
+                        [
+                            [0.10, 0.00, 0.00],
+                            [0.20, 0.00, 0.00],
+                            [0.50, 0.20, 0.00],
+                            [0.60, 0.10, 0.00],
+                        ]
+                    ],
+                    dtype=torch.float32,
+                ),
+                torch.tensor(
+                    [
+                        [
+                            [0.00, 0.10, 0.00],
+                            [0.00, 0.20, 0.00],
+                            [0.40, 0.30, 0.10],
+                            [0.55, 0.12, 0.08],
+                        ]
+                    ],
+                    dtype=torch.float32,
+                ),
+                torch.tensor(
+                    [
+                        [
+                            [0.00, 0.00, 0.10],
+                            [0.00, 0.00, 0.20],
+                            [0.60, 0.10, 0.05],
+                            [0.70, 0.08, 0.05],
+                        ]
+                    ],
+                    dtype=torch.float32,
+                ),
+            )
+        return FakeModelOutput(logits, hidden_states=hidden_states)
 
 
 class InMemoryEvaluationDataset(EvaluationDataset):
@@ -354,3 +402,70 @@ def test_evaluation_runner_with_provider_backed_token_stats_uses_extended_schema
     assert "token_logprob_std" in model_payload["feature_names"]
     assert "token_tail_low_confidence_rate_le_1_0" in model_payload["feature_names"]
     assert "token_entity_like_entropy_mean" in model_payload["feature_names"]
+
+
+def test_evaluation_runner_with_provider_backed_internal_features_uses_extended_schema(
+    tmp_path,
+) -> None:
+    provider = TransformersTokenStatProvider(
+        config=TransformersProviderConfig(
+            model_id="distilgpt2",
+            enable_internal_features=True,
+            selected_hidden_layers=(-1, -2),
+        ),
+        tokenizer=FakeTokenizer(),
+        model=FakeModel(),
+    )
+    dataset = RawExampleEvaluationDataset(
+        train_examples=[
+            RawLabeledExample(
+                prompt="hello prompt",
+                response="world again",
+                label=0,
+            ),
+            RawLabeledExample(
+                prompt="hello prompt",
+                response="world 2024",
+                label=1,
+            ),
+            RawLabeledExample(
+                prompt="hello prompt",
+                response="world again",
+                label=0,
+            ),
+            RawLabeledExample(
+                prompt="hello prompt",
+                response="world 2024",
+                label=1,
+            ),
+        ],
+        validation_examples=[
+            RawLabeledExample(
+                prompt="hello prompt",
+                response="world again",
+                label=0,
+            ),
+            RawLabeledExample(
+                prompt="hello prompt",
+                response="world 2024",
+                label=1,
+            ),
+        ],
+        extractor=StructuralFeatureExtractor(
+            enable_token_uncertainty=True,
+            enable_internal_features=True,
+        ),
+        token_stat_provider=provider,
+    )
+    runner: EvaluationRunner = TrainValidationEvaluationRunner(
+        dataset=dataset,
+        artifact_dir=tmp_path,
+    )
+
+    summary = runner.run()
+    model_payload = json.loads(Path(summary.model_artifact_path).read_text())
+
+    assert 0.0 <= summary.pr_auc <= 1.0
+    assert "internal_last_layer_pooled_l2" in model_payload["feature_names"]
+    assert "internal_selected_layer_norm_variance" in model_payload["feature_names"]
+    assert "internal_layer_disagreement_mean" in model_payload["feature_names"]

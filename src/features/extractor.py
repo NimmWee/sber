@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 import math
@@ -14,6 +16,7 @@ class FeatureExtractor(Protocol):
         prompt: str,
         response: str,
         token_stats: list["TokenUncertaintyStat"] | None = None,
+        internal_signal: "InternalModelSignal" | None = None,
     ) -> FeatureMap:
         ...
 
@@ -32,20 +35,31 @@ class TokenUncertaintyStat:
     top1_top2_margin: float
 
 
+@dataclass(frozen=True)
+class InternalModelSignal:
+    last_layer_pooled_l2: float
+    last_layer_pooled_mean_abs: float
+    selected_layer_norm_variance: float
+    layer_disagreement_mean: float
+
+
 class StructuralFeatureExtractor:
     def __init__(
         self,
         enable_uncertainty_proxies: bool = False,
         enable_token_uncertainty: bool = False,
+        enable_internal_features: bool = False,
     ) -> None:
         self.enable_uncertainty_proxies = enable_uncertainty_proxies
         self.enable_token_uncertainty = enable_token_uncertainty
+        self.enable_internal_features = enable_internal_features
 
     def extract(
         self,
         prompt: str,
         response: str,
         token_stats: list[TokenUncertaintyStat] | None = None,
+        internal_signal: InternalModelSignal | None = None,
     ) -> FeatureMap:
         prompt_tokens = self._tokenize(prompt)
         response_tokens = self._tokenize(response)
@@ -89,7 +103,28 @@ class StructuralFeatureExtractor:
             )
         if self.enable_token_uncertainty and token_stats is not None:
             features.update(self._extract_token_uncertainty_features(token_stats))
+        if self.enable_internal_features and internal_signal is not None:
+            features.update(self._extract_internal_features(internal_signal))
         return features
+
+    @staticmethod
+    def _extract_internal_features(
+        internal_signal: InternalModelSignal,
+    ) -> dict[str, float]:
+        return {
+            "internal_last_layer_pooled_l2": float(
+                internal_signal.last_layer_pooled_l2
+            ),
+            "internal_last_layer_pooled_mean_abs": float(
+                internal_signal.last_layer_pooled_mean_abs
+            ),
+            "internal_selected_layer_norm_variance": float(
+                internal_signal.selected_layer_norm_variance
+            ),
+            "internal_layer_disagreement_mean": float(
+                internal_signal.layer_disagreement_mean
+            ),
+        }
 
     def _extract_uncertainty_proxies(
         self,
