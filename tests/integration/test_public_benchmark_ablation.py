@@ -52,5 +52,6 @@ def test_run_public_benchmark_ablation_writes_summary(tmp_path) -> None:
     assert "base_token_uncertainty" in summary["variants"]
     assert "extended_token_uncertainty" in summary["variants"]
     assert "internal_features" in summary["variants"]
+    assert "internal_features_lightgbm" in summary["variants"]
     assert "best_variant" in summary
     assert Path(summary["artifact_path"]).exists()

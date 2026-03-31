@@ -12,7 +12,7 @@ from eval.metrics import compute_pr_auc
 from eval.public_benchmark import load_public_benchmark_examples
 from eval.runner import RawLabeledExample
 from features.extractor import StructuralFeatureExtractor
-from models.head import train_logistic_regression_head
+from models.head import train_lightgbm_head, train_logistic_regression_head
 from utils.script_helpers import write_json_artifact
 
 
@@ -119,6 +119,23 @@ def run_public_benchmark_ablation(
         head_learning_rate=0.08,
     )
     variants[stronger_head_variant["name"]] = stronger_head_variant
+    lightgbm_variant = _evaluate_variant(
+        name="internal_features_lightgbm",
+        train_examples=train_examples,
+        validation_examples=validation_examples,
+        token_stat_provider=_resolve_internal_provider(token_stat_provider),
+        extractor=StructuralFeatureExtractor(
+            enable_token_uncertainty=True,
+            enable_internal_features=True,
+            token_feature_groups=("base_token_uncertainty",),
+        ),
+        allowed_token_groups=("base_token_uncertainty",),
+        include_internal_features=True,
+        artifact_dir=output_dir / "internal_features_lightgbm",
+        latency_repeat_count=latency_repeat_count,
+        head_kind="lightgbm",
+    )
+    variants[lightgbm_variant["name"]] = lightgbm_variant
 
     best_variant_name = max(
         variants,
@@ -162,6 +179,7 @@ def _evaluate_variant(
     include_internal_features: bool = False,
     head_epochs: int = 250,
     head_learning_rate: float = 0.1,
+    head_kind: str = "logistic",
 ) -> dict:
     train_rows, train_labels = _prepare_feature_rows(
         examples=train_examples,
@@ -198,12 +216,15 @@ def _evaluate_variant(
         allowed_features=allowed_features,
     )
 
-    head = train_logistic_regression_head(
-        filtered_train_rows,
-        train_labels,
-        epochs=head_epochs,
-        learning_rate=head_learning_rate,
-    )
+    if head_kind == "lightgbm":
+        head = train_lightgbm_head(filtered_train_rows, train_labels)
+    else:
+        head = train_logistic_regression_head(
+            filtered_train_rows,
+            train_labels,
+            epochs=head_epochs,
+            learning_rate=head_learning_rate,
+        )
     probabilities = head.predict_proba_batch(filtered_validation_rows)
     pr_auc = compute_pr_auc(validation_labels, probabilities)
     error_summary = analyze_prediction_errors(
@@ -231,6 +252,7 @@ def _evaluate_variant(
             "pr_auc": pr_auc,
             "sample_size": len(validation_examples),
             "latency_total_mean_ms": latency_total_mean_ms,
+            "head_kind": head_kind,
             "false_positive_count": error_summary.false_positive_count,
             "false_negative_count": error_summary.false_negative_count,
             "non_trivial_buckets": error_summary.non_trivial_buckets,
@@ -241,6 +263,7 @@ def _evaluate_variant(
         "pr_auc": pr_auc,
         "sample_size": len(validation_examples),
         "latency_total_mean_ms": latency_total_mean_ms,
+        "head_kind": head_kind,
         "false_positive_count": error_summary.false_positive_count,
         "false_negative_count": error_summary.false_negative_count,
         "non_trivial_buckets": error_summary.non_trivial_buckets,
