@@ -22,7 +22,7 @@ from utils.latency import (
 )
 from utils.script_helpers import (
     build_smoke_examples,
-    load_transformers_provider_config,
+    resolve_transformers_provider_config,
     write_json_artifact,
 )
 
@@ -31,7 +31,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
-        default=str(PROJECT_ROOT / "configs" / "token_stat_provider.local.json"),
+        default=None,
     )
     parser.add_argument(
         "--artifact-dir",
@@ -45,7 +45,10 @@ def main() -> None:
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     train_examples, validation_examples = build_smoke_examples()
-    config = load_transformers_provider_config(args.config)
+    config = resolve_transformers_provider_config(
+        project_root=PROJECT_ROOT,
+        explicit_config_path=args.config,
+    )
     provider = TransformersTokenStatProvider(config=config)
 
     baseline_dataset = RawExampleEvaluationDataset(

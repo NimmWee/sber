@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import json
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -8,7 +9,11 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from utils.script_helpers import load_transformers_provider_config, write_json_artifact
+from utils.script_helpers import (
+    load_transformers_provider_config,
+    resolve_transformers_provider_config,
+    write_json_artifact,
+)
 
 
 def test_load_transformers_provider_config_reads_model_path_and_delimiter(
@@ -33,6 +38,22 @@ def test_load_transformers_provider_config_reads_model_path_and_delimiter(
     assert config.response_delimiter == "|<resp>|"
 
 
+def test_load_transformers_provider_config_defaults_device_to_auto(tmp_path) -> None:
+    config_path = tmp_path / "provider_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "model_id": "ai-sage/GigaChat3-10B-A1.8B-bf16",
+                "checkpoint_path": "/kaggle/temp/GigaChat3",
+            }
+        )
+    )
+
+    config = load_transformers_provider_config(config_path)
+
+    assert config.device == "auto"
+
+
 def test_write_json_artifact_creates_directory_and_writes_payload(tmp_path) -> None:
     artifact_dir = tmp_path / "artifacts" / "nested"
 
@@ -45,3 +66,121 @@ def test_write_json_artifact_creates_directory_and_writes_payload(tmp_path) -> N
     assert artifact_path.exists()
     assert artifact_path.parent == artifact_dir
     assert artifact_path.read_text() == '{\n  "status": "ok",\n  "score": 0.75\n}'
+
+
+def test_resolve_transformers_provider_config_prefers_explicit_path(tmp_path) -> None:
+    project_root = tmp_path / "project"
+    config_dir = project_root / "configs"
+    checkpoint_dir = tmp_path / "gigachat"
+    checkpoint_dir.mkdir(parents=True)
+    config_dir.mkdir(parents=True)
+
+    explicit_path = config_dir / "custom.json"
+    explicit_path.write_text(
+        json.dumps(
+            {
+                "model_id": "ai-sage/GigaChat3-10B-A1.8B-bf16",
+                "checkpoint_path": str(checkpoint_dir),
+                "device": "cpu",
+                "torch_dtype": "auto",
+                "response_delimiter": "|<resp>|",
+            }
+        )
+    )
+
+    resolved = resolve_transformers_provider_config(
+        project_root=project_root,
+        explicit_config_path=explicit_path,
+    )
+
+    assert resolved.model_source == str(checkpoint_dir)
+
+
+def test_resolve_transformers_provider_config_uses_local_override_when_checkpoint_exists(
+    tmp_path,
+) -> None:
+    project_root = tmp_path / "project"
+    config_dir = project_root / "configs"
+    checkpoint_dir = tmp_path / "GigaChat3"
+    checkpoint_dir.mkdir(parents=True)
+    config_dir.mkdir(parents=True)
+
+    (config_dir / "token_stat_provider.local.json").write_text(
+        json.dumps(
+            {
+                "model_id": "distilgpt2",
+                "checkpoint_path": str(checkpoint_dir),
+                "device": "cpu",
+                "torch_dtype": "auto",
+                "response_delimiter": "|<resp>|",
+            }
+        )
+    )
+    (config_dir / "token_stat_provider.json").write_text(
+        json.dumps({"model_id": "distilgpt2", "checkpoint_path": None})
+    )
+
+    resolved = resolve_transformers_provider_config(project_root=project_root)
+
+    assert resolved.model_source == str(checkpoint_dir)
+
+
+def test_resolve_transformers_provider_config_uses_kaggle_local_override_as_primary(
+    tmp_path,
+) -> None:
+    project_root = tmp_path / "project"
+    config_dir = project_root / "configs"
+    checkpoint_dir = tmp_path / "kaggle" / "temp" / "GigaChat3"
+    checkpoint_dir.mkdir(parents=True)
+    config_dir.mkdir(parents=True)
+
+    (config_dir / "token_stat_provider.local.json").write_text(
+        json.dumps(
+            {
+                "model_id": "ai-sage/GigaChat3-10B-A1.8B-bf16",
+                "checkpoint_path": str(checkpoint_dir),
+                "torch_dtype": "auto",
+                "response_delimiter": "|<resp>|",
+            }
+        )
+    )
+    (config_dir / "token_stat_provider.json").write_text(
+        json.dumps(
+            {
+                "model_id": "distilgpt2",
+                "checkpoint_path": None,
+            }
+        )
+    )
+
+    resolved = resolve_transformers_provider_config(project_root=project_root)
+
+    assert resolved.model_source == str(checkpoint_dir)
+    assert resolved.device == "auto"
+
+
+def test_resolve_transformers_provider_config_falls_back_when_local_override_is_not_a_real_checkpoint(
+    tmp_path,
+) -> None:
+    project_root = tmp_path / "project"
+    config_dir = project_root / "configs"
+    config_dir.mkdir(parents=True)
+
+    (config_dir / "token_stat_provider.local.json").write_text(
+        json.dumps({"model_id": "distilgpt2", "checkpoint_path": None})
+    )
+    (config_dir / "token_stat_provider.json").write_text(
+        json.dumps(
+            {
+                "model_id": "ai-sage/GigaChat3-10B-A1.8B-bf16",
+                "checkpoint_path": None,
+                "device": "cpu",
+                "torch_dtype": "auto",
+                "response_delimiter": "|<resp>|",
+            }
+        )
+    )
+
+    resolved = resolve_transformers_provider_config(project_root=project_root)
+
+    assert resolved.model_id == "ai-sage/GigaChat3-10B-A1.8B-bf16"

@@ -18,7 +18,7 @@ class TokenStatProvider(Protocol):
 class TransformersProviderConfig:
     model_id: str
     checkpoint_path: str | None = None
-    device: str = "cpu"
+    device: str = "auto"
     torch_dtype: str = "auto"
     response_delimiter: str = "\n\n### Response:\n"
 
@@ -28,7 +28,7 @@ class TransformersProviderConfig:
         return cls(
             model_id=payload["model_id"],
             checkpoint_path=payload.get("checkpoint_path"),
-            device=payload.get("device", "cpu"),
+            device=payload.get("device", "auto"),
             torch_dtype=payload.get("torch_dtype", "auto"),
             response_delimiter=payload.get(
                 "response_delimiter",
@@ -49,7 +49,7 @@ class GigaChatProviderConfig(TransformersProviderConfig):
         return cls(
             model_id=payload["model_id"],
             checkpoint_path=payload.get("checkpoint_path"),
-            device=payload.get("device", "cpu"),
+            device=payload.get("device", "auto"),
             torch_dtype=payload.get("torch_dtype", "auto"),
             response_delimiter=payload.get(
                 "response_delimiter",
@@ -87,7 +87,11 @@ class TransformersTokenStatProvider:
         if not response_token_indices:
             return []
 
-        input_ids = torch.tensor([full_ids], dtype=torch.long, device=self.config.device)
+        input_ids = torch.tensor(
+            [full_ids],
+            dtype=torch.long,
+            device=self._resolved_device(),
+        )
 
         with torch.no_grad():
             outputs = model(input_ids=input_ids)
@@ -158,21 +162,31 @@ class TransformersTokenStatProvider:
 
     def _get_tokenizer(self) -> Any:
         if self._tokenizer is None:
-            self._tokenizer = AutoTokenizer.from_pretrained(
-                self.config.model_source,
-                trust_remote_code=True,
-            )
+            try:
+                self._tokenizer = AutoTokenizer.from_pretrained(
+                    self.config.model_source,
+                    trust_remote_code=True,
+                )
+            except Exception as error:
+                raise RuntimeError(
+                    f"failed to load token-stat provider from {self.config.model_source}"
+                ) from error
         return self._tokenizer
 
     def _get_model(self) -> Any:
         if self._model is None:
-            self._model = AutoModelForCausalLM.from_pretrained(
-                self.config.model_source,
-                trust_remote_code=True,
-                torch_dtype=self.config.torch_dtype,
-            )
-            self._model.to(self.config.device)
-            self._model.eval()
+            try:
+                self._model = AutoModelForCausalLM.from_pretrained(
+                    self.config.model_source,
+                    trust_remote_code=True,
+                    torch_dtype=self.config.torch_dtype,
+                )
+                self._model.to(self._resolved_device())
+                self._model.eval()
+            except Exception as error:
+                raise RuntimeError(
+                    f"failed to load token-stat provider from {self.config.model_source}"
+                ) from error
         return self._model
 
     @staticmethod
@@ -203,6 +217,11 @@ class TransformersTokenStatProvider:
             return [int(tokenizer.eos_token_id)]
 
         raise ValueError("tokenizer must provide a BOS/EOS token for empty prompts")
+
+    def _resolved_device(self) -> str:
+        if self.config.device == "auto":
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        return self.config.device
 
 
 class GigaChatTokenStatProvider(TransformersTokenStatProvider):

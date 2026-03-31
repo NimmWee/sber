@@ -1,7 +1,7 @@
 {
-  "model_id": "distilgpt2",
-  "checkpoint_path": null,
-  "device": "cpu",
+  "model_id": "ai-sage/GigaChat3-10B-A1.8B-bf16",
+  "checkpoint_path": "/kaggle/temp/GigaChat3",
+  "device": "auto",
   "torch_dtype": "auto",
   "response_delimiter": "\n\n### Response:\n"
 }

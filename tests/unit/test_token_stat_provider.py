@@ -47,6 +47,16 @@ class FakeModelOutput:
 
 
 class FakeModel:
+    def __init__(self) -> None:
+        self.device: str | None = None
+
+    def to(self, device: str):
+        self.device = device
+        return self
+
+    def eval(self):
+        return self
+
     def __call__(self, *, input_ids: torch.Tensor) -> FakeModelOutput:
         sequence = input_ids[0].tolist()
         vocab_size = max(sequence) + 2
@@ -348,4 +358,30 @@ def test_provider_fails_clearly_on_malformed_model_output() -> None:
     )
 
     with pytest.raises(ValueError, match="logits"):
+        provider.collect(prompt="hello prompt", response="world again")
+
+
+def test_provider_fails_clearly_when_checkpoint_cannot_be_loaded(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    checkpoint_dir = tmp_path / "GigaChat3"
+    checkpoint_dir.mkdir()
+
+    def _raise_load_error(*args, **kwargs):
+        raise OSError("failed to load checkpoint")
+
+    monkeypatch.setattr(
+        "inference.token_stats.AutoTokenizer.from_pretrained",
+        _raise_load_error,
+    )
+
+    provider = TransformersTokenStatProvider(
+        config=TransformersProviderConfig(
+            model_id="ai-sage/GigaChat3-10B-A1.8B-bf16",
+            checkpoint_path=str(checkpoint_dir),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="failed to load token-stat provider"):
         provider.collect(prompt="hello prompt", response="world again")

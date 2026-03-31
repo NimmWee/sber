@@ -11,6 +11,28 @@ def load_transformers_provider_config(
     return TransformersProviderConfig.from_json(path)
 
 
+def resolve_transformers_provider_config(
+    *,
+    project_root: str | Path,
+    explicit_config_path: str | Path | None = None,
+) -> TransformersProviderConfig:
+    if explicit_config_path is not None:
+        return load_transformers_provider_config(explicit_config_path)
+
+    project_root_path = Path(project_root)
+    local_config_path = project_root_path / "configs" / "token_stat_provider.local.json"
+    default_config_path = project_root_path / "configs" / "token_stat_provider.json"
+
+    if local_config_path.exists():
+        local_config = load_transformers_provider_config(local_config_path)
+        if local_config.checkpoint_path is not None and Path(
+            local_config.checkpoint_path
+        ).exists():
+            return local_config
+
+    return load_transformers_provider_config(default_config_path)
+
+
 def write_json_artifact(
     *,
     artifact_dir: str | Path,
