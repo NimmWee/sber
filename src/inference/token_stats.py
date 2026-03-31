@@ -16,6 +16,9 @@ class TokenStatProvider(Protocol):
     def collect_signals(self, prompt: str, response: str) -> "CollectedModelSignals":
         ...
 
+    def share_backend(self, *, config: "TransformersProviderConfig") -> "TokenStatProvider":
+        ...
+
 
 @dataclass(frozen=True)
 class CollectedModelSignals:
@@ -113,6 +116,19 @@ class TransformersTokenStatProvider:
 
     def collect(self, prompt: str, response: str) -> list[TokenUncertaintyStat]:
         return self.collect_signals(prompt=prompt, response=response).token_stats
+
+    def share_backend(
+        self,
+        *,
+        config: TransformersProviderConfig,
+    ) -> "TransformersTokenStatProvider":
+        tokenizer = self._get_tokenizer()
+        model = self._get_model()
+        return TransformersTokenStatProvider(
+            config=config,
+            tokenizer=tokenizer,
+            model=model,
+        )
 
     def collect_signals(self, prompt: str, response: str) -> CollectedModelSignals:
         if not isinstance(prompt, str) or not isinstance(response, str):

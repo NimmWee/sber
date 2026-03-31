@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from eval.ablation import recommend_feature_group
@@ -13,13 +14,24 @@ def compare_base_vs_internal_features(
     *,
     train_examples: list[RawLabeledExample],
     validation_examples: list[RawLabeledExample],
-    base_provider: TokenStatProvider,
+    base_provider: TokenStatProvider | None,
     internal_provider: TokenStatProvider,
     artifact_dir: str | Path,
     latency_repeat_count: int = 20,
 ) -> dict:
     output_dir = Path(artifact_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if base_provider is None:
+        if not hasattr(internal_provider, "share_backend") or not hasattr(
+            internal_provider, "config"
+        ):
+            raise ValueError(
+                "base_provider is required when internal_provider cannot share its backend"
+            )
+        base_provider = internal_provider.share_backend(
+            config=replace(internal_provider.config, enable_internal_features=False)
+        )
 
     baseline_runner = TrainValidationEvaluationRunner(
         dataset=RawExampleEvaluationDataset(

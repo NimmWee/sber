@@ -34,9 +34,6 @@ def main() -> None:
         project_root=PROJECT_ROOT,
         explicit_config_path=args.config,
     )
-    base_provider = TransformersTokenStatProvider(
-        config=replace(config, enable_internal_features=False),
-    )
     internal_provider = TransformersTokenStatProvider(
         config=replace(
             config,
@@ -48,7 +45,7 @@ def main() -> None:
     summary = compare_base_vs_internal_features(
         train_examples=train_examples,
         validation_examples=validation_examples,
-        base_provider=base_provider,
+        base_provider=None,
         internal_provider=internal_provider,
         artifact_dir=args.artifact_dir,
         latency_repeat_count=args.latency_repeat_count,
