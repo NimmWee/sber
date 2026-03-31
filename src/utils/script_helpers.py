@@ -33,6 +33,26 @@ def resolve_transformers_provider_config(
     return load_transformers_provider_config(default_config_path)
 
 
+def resolve_public_benchmark_path(
+    *,
+    project_root: str | Path,
+    explicit_dataset_path: str | Path | None = None,
+) -> Path:
+    if explicit_dataset_path is not None:
+        return Path(explicit_dataset_path)
+
+    project_root_path = Path(project_root)
+    root_candidate = project_root_path / "knowledge_bench_public.csv"
+    if root_candidate.exists():
+        return root_candidate
+
+    data_candidate = project_root_path / "data" / "knowledge_bench_public.csv"
+    if data_candidate.exists():
+        return data_candidate
+
+    raise FileNotFoundError("knowledge_bench_public.csv was not found")
+
+
 def write_json_artifact(
     *,
     artifact_dir: str | Path,

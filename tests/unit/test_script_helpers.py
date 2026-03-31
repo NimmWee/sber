@@ -12,6 +12,7 @@ if str(SRC_ROOT) not in sys.path:
 from utils.script_helpers import (
     build_ablation_examples,
     load_transformers_provider_config,
+    resolve_public_benchmark_path,
     resolve_transformers_provider_config,
     write_json_artifact,
 )
@@ -194,3 +195,28 @@ def test_build_ablation_examples_returns_larger_labeled_slice() -> None:
     assert len(validation_examples) > 4
     assert {example.label for example in train_examples} == {0, 1}
     assert {example.label for example in validation_examples} == {0, 1}
+
+
+def test_resolve_public_benchmark_path_prefers_explicit_path(tmp_path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    explicit_path = tmp_path / "custom.csv"
+    explicit_path.write_text("prompt,model_answer,is_hallucination\n", encoding="utf-8")
+
+    resolved = resolve_public_benchmark_path(
+        project_root=project_root,
+        explicit_dataset_path=explicit_path,
+    )
+
+    assert resolved == explicit_path
+
+
+def test_resolve_public_benchmark_path_falls_back_to_project_root_file(tmp_path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    dataset_path = project_root / "knowledge_bench_public.csv"
+    dataset_path.write_text("prompt,model_answer,is_hallucination\n", encoding="utf-8")
+
+    resolved = resolve_public_benchmark_path(project_root=project_root)
+
+    assert resolved == dataset_path
