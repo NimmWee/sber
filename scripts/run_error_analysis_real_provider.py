@@ -11,9 +11,9 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
+from eval.default_detector import build_default_detector_extractor
 from eval.error_analysis import DefaultDetectorErrorAnalysisRunner
 from eval.runner import RawExampleEvaluationDataset
-from features.extractor import StructuralFeatureExtractor
 from inference.token_stats import TransformersTokenStatProvider
 from utils.script_helpers import (
     build_ablation_examples,
@@ -44,7 +44,7 @@ def main() -> None:
         dataset=RawExampleEvaluationDataset(
             train_examples=train_examples,
             validation_examples=validation_examples,
-            extractor=StructuralFeatureExtractor(enable_token_uncertainty=True),
+            extractor=build_default_detector_extractor(),
             token_stat_provider=provider,
         ),
         artifact_dir=artifact_dir / "default_detector",

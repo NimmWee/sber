@@ -49,10 +49,12 @@ class StructuralFeatureExtractor:
         enable_uncertainty_proxies: bool = False,
         enable_token_uncertainty: bool = False,
         enable_internal_features: bool = False,
+        token_feature_groups: tuple[str, ...] | None = None,
     ) -> None:
         self.enable_uncertainty_proxies = enable_uncertainty_proxies
         self.enable_token_uncertainty = enable_token_uncertainty
         self.enable_internal_features = enable_internal_features
+        self.token_feature_groups = token_feature_groups
 
     def extract(
         self,
@@ -102,7 +104,12 @@ class StructuralFeatureExtractor:
                 )
             )
         if self.enable_token_uncertainty and token_stats is not None:
-            features.update(self._extract_token_uncertainty_features(token_stats))
+            features.update(
+                self._extract_token_uncertainty_features(
+                    token_stats,
+                    enabled_groups=self.token_feature_groups,
+                )
+            )
         if self.enable_internal_features and internal_signal is not None:
             features.update(self._extract_internal_features(internal_signal))
         return features
@@ -179,39 +186,49 @@ class StructuralFeatureExtractor:
     @staticmethod
     def _extract_token_uncertainty_features(
         token_stats: list[TokenUncertaintyStat],
+        *,
+        enabled_groups: tuple[str, ...] | None = None,
     ) -> dict[str, float]:
-        if not token_stats:
-            return {
-                **StructuralFeatureExtractor._extract_token_uncertainty_base(token_stats),
-                **StructuralFeatureExtractor._extract_token_uncertainty_variance_std(
-                    token_stats
-                ),
-                **StructuralFeatureExtractor._extract_token_uncertainty_segment_summaries(
-                    token_stats
-                ),
-                **StructuralFeatureExtractor._extract_token_uncertainty_span_tail_rates(
-                    token_stats
-                ),
-                **StructuralFeatureExtractor._extract_token_uncertainty_specialized(
-                    token_stats
-                ),
-            }
-
-        return {
-            **StructuralFeatureExtractor._extract_token_uncertainty_base(token_stats),
-            **StructuralFeatureExtractor._extract_token_uncertainty_variance_std(
-                token_stats
-            ),
-            **StructuralFeatureExtractor._extract_token_uncertainty_segment_summaries(
-                token_stats
-            ),
-            **StructuralFeatureExtractor._extract_token_uncertainty_span_tail_rates(
-                token_stats
-            ),
-            **StructuralFeatureExtractor._extract_token_uncertainty_specialized(
-                token_stats
-            ),
-        }
+        group_order = enabled_groups or (
+            "base_token_uncertainty",
+            "variance_std",
+            "segment_summaries",
+            "span_tail_rates",
+            "specialized_tokens",
+        )
+        features: dict[str, float] = {}
+        for group_name in group_order:
+            if group_name == "base_token_uncertainty":
+                features.update(
+                    StructuralFeatureExtractor._extract_token_uncertainty_base(
+                        token_stats
+                    )
+                )
+            elif group_name == "variance_std":
+                features.update(
+                    StructuralFeatureExtractor._extract_token_uncertainty_variance_std(
+                        token_stats
+                    )
+                )
+            elif group_name == "segment_summaries":
+                features.update(
+                    StructuralFeatureExtractor._extract_token_uncertainty_segment_summaries(
+                        token_stats
+                    )
+                )
+            elif group_name == "span_tail_rates":
+                features.update(
+                    StructuralFeatureExtractor._extract_token_uncertainty_span_tail_rates(
+                        token_stats
+                    )
+                )
+            elif group_name == "specialized_tokens":
+                features.update(
+                    StructuralFeatureExtractor._extract_token_uncertainty_specialized(
+                        token_stats
+                    )
+                )
+        return features
 
     @staticmethod
     def _extract_token_uncertainty_base(

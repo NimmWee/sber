@@ -11,8 +11,8 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
+from eval.default_detector import build_default_detector_extractor
 from eval.runner import RawExampleEvaluationDataset
-from features.extractor import StructuralFeatureExtractor
 from inference.token_stats import TransformersTokenStatProvider
 from models.head import train_logistic_regression_head
 from utils.latency import (
@@ -54,12 +54,12 @@ def main() -> None:
     baseline_dataset = RawExampleEvaluationDataset(
         train_examples=train_examples,
         validation_examples=validation_examples,
-        extractor=StructuralFeatureExtractor(),
+        extractor=build_default_detector_extractor(),
     )
     provider_dataset = RawExampleEvaluationDataset(
         train_examples=train_examples,
         validation_examples=validation_examples,
-        extractor=StructuralFeatureExtractor(enable_token_uncertainty=True),
+        extractor=build_default_detector_extractor(),
         token_stat_provider=provider,
     )
 
@@ -78,7 +78,7 @@ def main() -> None:
     baseline_result = benchmark_single_example_latency(
         prompt=probe_example.prompt,
         response=probe_example.response,
-        extractor=StructuralFeatureExtractor(),
+        extractor=build_default_detector_extractor(),
         head=baseline_head,
         config=LatencyBenchmarkConfig(
             repeat_count=args.baseline_repeat_count,
@@ -88,7 +88,7 @@ def main() -> None:
     provider_result = benchmark_single_example_latency_with_provider(
         prompt=probe_example.prompt,
         response=probe_example.response,
-        extractor=StructuralFeatureExtractor(enable_token_uncertainty=True),
+        extractor=build_default_detector_extractor(),
         head=provider_head,
         token_stat_provider=provider,
         config=LatencyBenchmarkConfig(
@@ -107,6 +107,7 @@ def main() -> None:
         "token_stat_collection_p50_ms": provider_result.token_stat_collection.p50_ms,
         "feature_aggregation_p50_ms": provider_result.feature_aggregation.p50_ms,
         "head_inference_p50_ms": provider_result.head_inference.p50_ms,
+        "default_detector": "structural + base token uncertainty only",
     }
     artifact_path = write_json_artifact(
         artifact_dir=artifact_dir,

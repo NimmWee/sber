@@ -3,7 +3,7 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from eval.ablation import build_feature_allowlist, filter_feature_rows
+from eval.default_detector import filter_default_detector_rows
 from eval.metrics import compute_pr_auc
 from eval.runner import RawExampleEvaluationDataset, RawLabeledExample
 from models.head import train_logistic_regression_head
@@ -156,22 +156,11 @@ class DefaultDetectorErrorAnalysisRunner:
 
     def run(self) -> ErrorAnalysisSummary:
         split = self.dataset.load_split()
-        allowed_features = build_feature_allowlist(
-            structural_feature_names={
-                feature_name
-                for feature_row in split.train_features + split.validation_features
-                for feature_name in feature_row
-                if not feature_name.startswith("token_")
-            },
-            enabled_groups=("base_token_uncertainty",),
-        )
-        train_features = filter_feature_rows(
+        train_features = filter_default_detector_rows(
             feature_rows=split.train_features,
-            allowed_features=allowed_features,
         )
-        validation_features = filter_feature_rows(
+        validation_features = filter_default_detector_rows(
             feature_rows=split.validation_features,
-            allowed_features=allowed_features,
         )
 
         model = train_logistic_regression_head(train_features, split.train_labels)

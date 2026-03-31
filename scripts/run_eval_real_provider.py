@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -11,9 +12,10 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
+from eval.default_detector import build_default_detector_extractor
 from eval.runner import RawExampleEvaluationDataset, TrainValidationEvaluationRunner
-from features.extractor import StructuralFeatureExtractor
 from inference.token_stats import TransformersTokenStatProvider
+from models.head import TrainedLogisticRegressionHead
 from utils.script_helpers import (
     build_smoke_examples,
     resolve_transformers_provider_config,
@@ -46,7 +48,7 @@ def main() -> None:
         dataset=RawExampleEvaluationDataset(
             train_examples=train_examples,
             validation_examples=validation_examples,
-            extractor=StructuralFeatureExtractor(),
+            extractor=build_default_detector_extractor(),
         ),
         artifact_dir=artifact_dir / "baseline",
     ).run()
@@ -56,11 +58,13 @@ def main() -> None:
         dataset=RawExampleEvaluationDataset(
             train_examples=train_examples,
             validation_examples=validation_examples,
-            extractor=StructuralFeatureExtractor(enable_token_uncertainty=True),
+            extractor=build_default_detector_extractor(),
             token_stat_provider=provider,
         ),
         artifact_dir=artifact_dir / "provider",
     ).run()
+
+    provider_model_payload = json.loads(Path(provider_summary.model_artifact_path).read_text())
 
     payload = {
         "model_source": config.model_source,
@@ -68,6 +72,7 @@ def main() -> None:
         "baseline_pr_auc": baseline_summary.pr_auc,
         "provider_pr_auc": provider_summary.pr_auc,
         "pr_auc_delta": provider_summary.pr_auc - baseline_summary.pr_auc,
+        "default_detector_feature_names": provider_model_payload["feature_names"],
         "baseline_summary_artifact_path": baseline_summary.summary_artifact_path,
         "provider_summary_artifact_path": provider_summary.summary_artifact_path,
     }
