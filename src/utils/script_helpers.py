@@ -112,3 +112,72 @@ def build_smoke_examples() -> tuple[list[RawLabeledExample], list[RawLabeledExam
         ),
     ]
     return train_examples, validation_examples
+
+
+def build_ablation_examples() -> tuple[list[RawLabeledExample], list[RawLabeledExample]]:
+    train_examples, validation_examples = build_smoke_examples()
+    train_examples = train_examples + [
+        RawLabeledExample(
+            prompt="Who painted the Mona Lisa?",
+            response="Leonardo da Vinci painted the Mona Lisa.",
+            label=0,
+        ),
+        RawLabeledExample(
+            prompt="What is the capital of Japan?",
+            response="Tokyo is the capital of Japan.",
+            label=0,
+        ),
+        RawLabeledExample(
+            prompt="When did Apollo 11 land on the Moon?",
+            response="Apollo 11 landed on the Moon in 1969.",
+            label=0,
+        ),
+        RawLabeledExample(
+            prompt="How many planets are in the Solar System?",
+            response="There are 8 planets in the Solar System.",
+            label=0,
+        ),
+        RawLabeledExample(
+            prompt="Who painted the Mona Lisa?",
+            response="Pablo Picasso painted the Mona Lisa in 1921.",
+            label=1,
+        ),
+        RawLabeledExample(
+            prompt="What is the capital of Japan?",
+            response="Osaka is the capital of Japan as of 2026.",
+            label=1,
+        ),
+        RawLabeledExample(
+            prompt="When did Apollo 11 land on the Moon?",
+            response="Apollo 11 landed on the Moon in 1974.",
+            label=1,
+        ),
+        RawLabeledExample(
+            prompt="How many planets are in the Solar System?",
+            response="There are 11 planets in the Solar System today.",
+            label=1,
+        ),
+    ]
+    validation_examples = validation_examples + [
+        RawLabeledExample(
+            prompt="Who discovered penicillin?",
+            response="Alexander Fleming discovered penicillin.",
+            label=0,
+        ),
+        RawLabeledExample(
+            prompt="What is the capital of Canada?",
+            response="Ottawa is the capital of Canada.",
+            label=0,
+        ),
+        RawLabeledExample(
+            prompt="Who discovered penicillin?",
+            response="Marie Curie discovered penicillin in 1932.",
+            label=1,
+        ),
+        RawLabeledExample(
+            prompt="What is the capital of Canada?",
+            response="Toronto is the capital of Canada.",
+            label=1,
+        ),
+    ]
+    return train_examples, validation_examples

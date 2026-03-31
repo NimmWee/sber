@@ -288,6 +288,9 @@ def test_evaluation_runner_with_token_uncertainty_uses_extended_schema(
     assert "token_mean_logprob" in model_payload["feature_names"]
     assert "token_min_logprob" in model_payload["feature_names"]
     assert "token_entropy_mean" in model_payload["feature_names"]
+    assert "token_logprob_std" in model_payload["feature_names"]
+    assert "token_tail_low_confidence_rate_le_1_0" in model_payload["feature_names"]
+    assert "token_entity_like_entropy_mean" in model_payload["feature_names"]
 
 
 def test_evaluation_runner_with_provider_backed_token_stats_uses_extended_schema(
@@ -348,3 +351,6 @@ def test_evaluation_runner_with_provider_backed_token_stats_uses_extended_schema
     assert "token_mean_logprob" in model_payload["feature_names"]
     assert "token_min_logprob" in model_payload["feature_names"]
     assert "token_entropy_mean" in model_payload["feature_names"]
+    assert "token_logprob_std" in model_payload["feature_names"]
+    assert "token_tail_low_confidence_rate_le_1_0" in model_payload["feature_names"]
+    assert "token_entity_like_entropy_mean" in model_payload["feature_names"]

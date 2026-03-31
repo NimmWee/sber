@@ -35,10 +35,35 @@ UNCERTAINTY_FEATURES = {
 TOKEN_UNCERTAINTY_FEATURES = {
     "token_mean_logprob",
     "token_min_logprob",
+    "token_logprob_variance",
+    "token_logprob_std",
     "token_entropy_mean",
+    "token_entropy_variance",
+    "token_entropy_std",
     "token_top1_top2_margin_mean",
+    "token_top1_top2_margin_variance",
+    "token_top1_top2_margin_std",
     "token_tail_low_confidence_rate",
     "token_confidence_decay",
+    "token_first_segment_mean_logprob",
+    "token_middle_segment_mean_logprob",
+    "token_last_segment_mean_logprob",
+    "token_first_segment_mean_entropy",
+    "token_middle_segment_mean_entropy",
+    "token_last_segment_mean_entropy",
+    "token_first_segment_mean_margin",
+    "token_middle_segment_mean_margin",
+    "token_last_segment_mean_margin",
+    "token_longest_low_confidence_span_length",
+    "token_tail_low_confidence_rate_le_0_5",
+    "token_tail_low_confidence_rate_le_1_0",
+    "token_tail_low_confidence_rate_le_1_5",
+    "token_number_logprob_mean",
+    "token_number_entropy_mean",
+    "token_date_logprob_mean",
+    "token_date_entropy_mean",
+    "token_entity_like_logprob_mean",
+    "token_entity_like_entropy_mean",
 }
 
 
@@ -62,6 +87,20 @@ def _token_stats() -> list[TokenUncertaintyStat]:
             entropy=0.55,
             top1_top2_margin=0.20,
         ),
+    ]
+
+
+def _extended_token_stats() -> list[TokenUncertaintyStat]:
+    return [
+        TokenUncertaintyStat("Alice", -0.08, 0.18, 0.70),
+        TokenUncertaintyStat("visited", -0.12, 0.22, 0.62),
+        TokenUncertaintyStat("Paris", -0.35, 0.40, 0.38),
+        TokenUncertaintyStat("on", -0.18, 0.21, 0.58),
+        TokenUncertaintyStat("2024-01-15", -1.30, 0.95, 0.12),
+        TokenUncertaintyStat("with", -0.22, 0.24, 0.52),
+        TokenUncertaintyStat("3", -1.45, 1.05, 0.08),
+        TokenUncertaintyStat("companions", -0.28, 0.30, 0.44),
+        TokenUncertaintyStat("yesterday", -1.10, 0.90, 0.15),
     ]
 
 
@@ -252,6 +291,13 @@ def test_extract_with_token_uncertainty_handles_empty_response() -> None:
     assert features["token_top1_top2_margin_mean"] == 0.0
     assert features["token_tail_low_confidence_rate"] == 0.0
     assert features["token_confidence_decay"] == 0.0
+    assert features["token_logprob_std"] == 0.0
+    assert features["token_entropy_std"] == 0.0
+    assert features["token_top1_top2_margin_std"] == 0.0
+    assert features["token_longest_low_confidence_span_length"] == 0.0
+    assert features["token_tail_low_confidence_rate_le_1_5"] == 0.0
+    assert features["token_number_logprob_mean"] == 0.0
+    assert features["token_date_entropy_mean"] == 0.0
 
 
 def test_extract_with_token_uncertainty_handles_long_response() -> None:
@@ -293,6 +339,54 @@ def test_extract_with_token_uncertainty_handles_numbers_and_dates() -> None:
 
     assert features["token_min_logprob"] <= features["token_mean_logprob"]
     assert features["token_tail_low_confidence_rate"] > 0.0
+
+
+def test_extract_with_token_uncertainty_exposes_extended_aggregation_features() -> None:
+    extractor = StructuralFeatureExtractor(enable_token_uncertainty=True)
+
+    features = extractor.extract(
+        prompt="State the travel details.",
+        response="Alice visited Paris on 2024-01-15 with 3 companions yesterday.",
+        token_stats=_extended_token_stats(),
+    )
+
+    assert features["token_logprob_variance"] > 0.0
+    assert features["token_entropy_variance"] > 0.0
+    assert features["token_top1_top2_margin_variance"] > 0.0
+    assert features["token_longest_low_confidence_span_length"] >= 1.0
+    assert (
+        features["token_tail_low_confidence_rate_le_0_5"]
+        >= features["token_tail_low_confidence_rate_le_1_0"]
+        >= features["token_tail_low_confidence_rate_le_1_5"]
+    )
+    assert features["token_number_logprob_mean"] < 0.0
+    assert features["token_date_entropy_mean"] > 0.0
+    assert features["token_entity_like_logprob_mean"] < 0.0
+
+
+def test_extract_with_token_uncertainty_segment_summaries_are_finite_and_present() -> None:
+    extractor = StructuralFeatureExtractor(enable_token_uncertainty=True)
+
+    features = extractor.extract(
+        prompt="State the travel details.",
+        response="Alice visited Paris on 2024-01-15 with 3 companions yesterday.",
+        token_stats=_extended_token_stats(),
+    )
+
+    segment_feature_names = {
+        "token_first_segment_mean_logprob",
+        "token_middle_segment_mean_logprob",
+        "token_last_segment_mean_logprob",
+        "token_first_segment_mean_entropy",
+        "token_middle_segment_mean_entropy",
+        "token_last_segment_mean_entropy",
+        "token_first_segment_mean_margin",
+        "token_middle_segment_mean_margin",
+        "token_last_segment_mean_margin",
+    }
+
+    assert segment_feature_names.issubset(features.keys())
+    assert all(math.isfinite(features[name]) for name in segment_feature_names)
 
 
 def test_token_uncertainty_features_are_only_present_when_enabled_and_provided() -> None:

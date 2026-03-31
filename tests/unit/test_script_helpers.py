@@ -10,6 +10,7 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from utils.script_helpers import (
+    build_ablation_examples,
     load_transformers_provider_config,
     resolve_transformers_provider_config,
     write_json_artifact,
@@ -184,3 +185,12 @@ def test_resolve_transformers_provider_config_falls_back_when_local_override_is_
     resolved = resolve_transformers_provider_config(project_root=project_root)
 
     assert resolved.model_id == "ai-sage/GigaChat3-10B-A1.8B-bf16"
+
+
+def test_build_ablation_examples_returns_larger_labeled_slice() -> None:
+    train_examples, validation_examples = build_ablation_examples()
+
+    assert len(train_examples) > 8
+    assert len(validation_examples) > 4
+    assert {example.label for example in train_examples} == {0, 1}
+    assert {example.label for example in validation_examples} == {0, 1}
