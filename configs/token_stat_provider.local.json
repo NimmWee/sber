@@ -5,7 +5,7 @@
   "torch_dtype": "auto",
   "response_delimiter": "\n\n### Response:\n",
   "max_memory": {
-    "cuda:0": "14GiB",
-    "cuda:1": "14GiB"
+    "0": "14GiB",
+    "1": "14GiB"
   }
 }

@@ -440,7 +440,7 @@ def test_provider_loads_auto_device_map_without_redundant_to(monkeypatch) -> Non
         config=TransformersProviderConfig(
             model_id="ai-sage/GigaChat3-10B-A1.8B-bf16",
             device="auto",
-            max_memory={"cuda:0": "14GiB", "cuda:1": "14GiB"},
+            max_memory={0: "14GiB", 1: "14GiB"},
         ),
     )
 
@@ -448,7 +448,7 @@ def test_provider_loads_auto_device_map_without_redundant_to(monkeypatch) -> Non
 
     assert loaded_model is fake_model
     assert load_kwargs["device_map"] == "auto"
-    assert load_kwargs["max_memory"] == {"cuda:0": "14GiB", "cuda:1": "14GiB"}
+    assert load_kwargs["max_memory"] == {0: "14GiB", 1: "14GiB"}
 
 
 def test_dispatched_model_uses_cpu_input_path() -> None:
@@ -461,3 +461,39 @@ def test_dispatched_model_uses_cpu_input_path() -> None:
     input_device = provider._input_device_for_model(provider._get_model())
 
     assert input_device == "cpu"
+
+
+def test_config_normalizes_string_integer_max_memory_keys_from_json(tmp_path) -> None:
+    config_path = tmp_path / "provider_config.json"
+    config_path.write_text(
+        '{'
+        '"model_id": "ai-sage/GigaChat3-10B-A1.8B-bf16", '
+        '"max_memory": {"0": "14GiB", "1": "14GiB"}'
+        '}'
+    )
+
+    config = TransformersProviderConfig.from_json(config_path)
+
+    assert config.max_memory == {0: "14GiB", 1: "14GiB"}
+
+
+def test_config_keeps_integer_max_memory_keys() -> None:
+    config = TransformersProviderConfig(
+        model_id="ai-sage/GigaChat3-10B-A1.8B-bf16",
+        max_memory={0: "14GiB", 1: "14GiB"},
+    )
+
+    assert config.max_memory == {0: "14GiB", 1: "14GiB"}
+
+
+def test_config_rejects_cuda_prefixed_max_memory_keys(tmp_path) -> None:
+    config_path = tmp_path / "provider_config.json"
+    config_path.write_text(
+        '{'
+        '"model_id": "ai-sage/GigaChat3-10B-A1.8B-bf16", '
+        '"max_memory": {"cuda:0": "14GiB", "cuda:1": "14GiB"}'
+        '}'
+    )
+
+    with pytest.raises(ValueError, match="max_memory keys must be integer GPU ids"):
+        TransformersProviderConfig.from_json(config_path)

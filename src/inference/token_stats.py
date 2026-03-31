@@ -21,7 +21,10 @@ class TransformersProviderConfig:
     device: str = "auto"
     torch_dtype: str = "auto"
     response_delimiter: str = "\n\n### Response:\n"
-    max_memory: dict[str, str] | None = None
+    max_memory: dict[int, str] | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "max_memory", self._normalize_max_memory(self.max_memory))
 
     @classmethod
     def from_json(cls, path: str | Path) -> "TransformersProviderConfig":
@@ -41,6 +44,26 @@ class TransformersProviderConfig:
     @property
     def model_source(self) -> str:
         return self.checkpoint_path or self.model_id
+
+    @staticmethod
+    def _normalize_max_memory(
+        max_memory: dict[Any, str] | None,
+    ) -> dict[int, str] | None:
+        if max_memory is None:
+            return None
+
+        normalized: dict[int, str] = {}
+        for key, value in max_memory.items():
+            if isinstance(key, int):
+                normalized[key] = value
+                continue
+            if isinstance(key, str) and key.isdigit():
+                normalized[int(key)] = value
+                continue
+            raise ValueError(
+                "max_memory keys must be integer GPU ids like 0 or 1, not cuda:N"
+            )
+        return normalized
 
 
 @dataclass(frozen=True)
