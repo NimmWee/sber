@@ -3,5 +3,9 @@
   "checkpoint_path": "/kaggle/temp/GigaChat3",
   "device": "auto",
   "torch_dtype": "auto",
-  "response_delimiter": "\n\n### Response:\n"
+  "response_delimiter": "\n\n### Response:\n",
+  "max_memory": {
+    "cuda:0": "14GiB",
+    "cuda:1": "14GiB"
+  }
 }

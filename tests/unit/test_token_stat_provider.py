@@ -49,8 +49,10 @@ class FakeModelOutput:
 class FakeModel:
     def __init__(self) -> None:
         self.device: str | None = None
+        self.to_calls = 0
 
     def to(self, device: str):
+        self.to_calls += 1
         self.device = device
         return self
 
@@ -109,6 +111,15 @@ class OffsetAwareTokenizer:
 class MalformedModel:
     def __call__(self, *, input_ids: torch.Tensor):
         return object()
+
+
+class FakeDispatchedModel(FakeModel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.hf_device_map = {"model.embed_tokens": 0, "lm_head": 1}
+
+    def to(self, device: str):
+        raise AssertionError("dispatched model must not be moved with .to()")
 
 
 class DelimiterAwareTokenizer:
@@ -385,3 +396,68 @@ def test_provider_fails_clearly_when_checkpoint_cannot_be_loaded(
 
     with pytest.raises(RuntimeError, match="failed to load token-stat provider"):
         provider.collect(prompt="hello prompt", response="world again")
+
+
+def test_provider_loads_single_device_model_without_device_map(monkeypatch) -> None:
+    fake_model = FakeModel()
+    load_kwargs = {}
+
+    def _load_model(*args, **kwargs):
+        load_kwargs.update(kwargs)
+        return fake_model
+
+    monkeypatch.setattr(
+        "inference.token_stats.AutoModelForCausalLM.from_pretrained",
+        _load_model,
+    )
+
+    provider = TransformersTokenStatProvider(
+        config=TransformersProviderConfig(model_id="distilgpt2", device="cpu"),
+    )
+
+    loaded_model = provider._get_model()
+
+    assert loaded_model is fake_model
+    assert "device_map" not in load_kwargs
+    assert fake_model.device == "cpu"
+    assert fake_model.to_calls == 1
+
+
+def test_provider_loads_auto_device_map_without_redundant_to(monkeypatch) -> None:
+    fake_model = FakeDispatchedModel()
+    load_kwargs = {}
+
+    def _load_model(*args, **kwargs):
+        load_kwargs.update(kwargs)
+        return fake_model
+
+    monkeypatch.setattr(
+        "inference.token_stats.AutoModelForCausalLM.from_pretrained",
+        _load_model,
+    )
+
+    provider = TransformersTokenStatProvider(
+        config=TransformersProviderConfig(
+            model_id="ai-sage/GigaChat3-10B-A1.8B-bf16",
+            device="auto",
+            max_memory={"cuda:0": "14GiB", "cuda:1": "14GiB"},
+        ),
+    )
+
+    loaded_model = provider._get_model()
+
+    assert loaded_model is fake_model
+    assert load_kwargs["device_map"] == "auto"
+    assert load_kwargs["max_memory"] == {"cuda:0": "14GiB", "cuda:1": "14GiB"}
+
+
+def test_dispatched_model_uses_cpu_input_path() -> None:
+    provider = TransformersTokenStatProvider(
+        config=TransformersProviderConfig(model_id="distilgpt2", device="auto"),
+        tokenizer=FakeTokenizer(),
+        model=FakeDispatchedModel(),
+    )
+
+    input_device = provider._input_device_for_model(provider._get_model())
+
+    assert input_device == "cpu"

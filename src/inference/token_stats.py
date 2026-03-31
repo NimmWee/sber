@@ -21,6 +21,7 @@ class TransformersProviderConfig:
     device: str = "auto"
     torch_dtype: str = "auto"
     response_delimiter: str = "\n\n### Response:\n"
+    max_memory: dict[str, str] | None = None
 
     @classmethod
     def from_json(cls, path: str | Path) -> "TransformersProviderConfig":
@@ -34,6 +35,7 @@ class TransformersProviderConfig:
                 "response_delimiter",
                 "\n\n### Response:\n",
             ),
+            max_memory=payload.get("max_memory"),
         )
 
     @property
@@ -55,6 +57,7 @@ class GigaChatProviderConfig(TransformersProviderConfig):
                 "response_delimiter",
                 "\n\n### Response:\n",
             ),
+            max_memory=payload.get("max_memory"),
         )
 
 
@@ -90,7 +93,7 @@ class TransformersTokenStatProvider:
         input_ids = torch.tensor(
             [full_ids],
             dtype=torch.long,
-            device=self._resolved_device(),
+            device=self._input_device_for_model(model),
         )
 
         with torch.no_grad():
@@ -176,12 +179,21 @@ class TransformersTokenStatProvider:
     def _get_model(self) -> Any:
         if self._model is None:
             try:
+                model_load_kwargs: dict[str, Any] = {
+                    "trust_remote_code": True,
+                    "torch_dtype": self.config.torch_dtype,
+                }
+                if self._should_use_device_map_auto():
+                    model_load_kwargs["device_map"] = "auto"
+                    if self.config.max_memory is not None:
+                        model_load_kwargs["max_memory"] = self.config.max_memory
+
                 self._model = AutoModelForCausalLM.from_pretrained(
                     self.config.model_source,
-                    trust_remote_code=True,
-                    torch_dtype=self.config.torch_dtype,
+                    **model_load_kwargs,
                 )
-                self._model.to(self._resolved_device())
+                if not self._uses_dispatched_model(self._model):
+                    self._model.to(self._resolved_device())
                 self._model.eval()
             except Exception as error:
                 raise RuntimeError(
@@ -222,6 +234,18 @@ class TransformersTokenStatProvider:
         if self.config.device == "auto":
             return "cuda" if torch.cuda.is_available() else "cpu"
         return self.config.device
+
+    def _should_use_device_map_auto(self) -> bool:
+        return self.config.device == "auto"
+
+    def _input_device_for_model(self, model: Any) -> str:
+        if self._uses_dispatched_model(model):
+            return "cpu"
+        return self._resolved_device()
+
+    @staticmethod
+    def _uses_dispatched_model(model: Any) -> bool:
+        return bool(getattr(model, "hf_device_map", None))
 
 
 class GigaChatTokenStatProvider(TransformersTokenStatProvider):
