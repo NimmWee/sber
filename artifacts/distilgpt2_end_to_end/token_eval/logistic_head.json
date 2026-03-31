@@ -1,0 +1,33 @@
+{
+  "feature_names": [
+    "digit_count",
+    "novelty_ratio_proxy",
+    "prompt_response_overlap",
+    "punctuation_count",
+    "response_length",
+    "sentence_count_proxy",
+    "token_confidence_decay",
+    "token_count_proxy",
+    "token_entropy_mean",
+    "token_mean_logprob",
+    "token_min_logprob",
+    "token_tail_low_confidence_rate",
+    "token_top1_top2_margin_mean"
+  ],
+  "weights": [
+    1.4674768093231982,
+    0.05521959804989101,
+    -0.22247436554526623,
+    0.024028508447657526,
+    0.788701986980029,
+    -0.16725476749537518,
+    2.831457871577948,
+    0.32685043371966427,
+    -0.8036976164478656,
+    0.13326264315718978,
+    1.6793209495817831,
+    -0.1406309484801246,
+    -0.033207360077710094
+  ],
+  "bias": -0.16725476749537518
+}

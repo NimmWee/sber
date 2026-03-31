@@ -1,0 +1,6 @@
+{
+  "pr_auc": 0.5,
+  "sample_size": 4,
+  "model_artifact_path": "C:\\sber\\artifacts\\eval_real_provider\\baseline\\logistic_head.json",
+  "summary_artifact_path": "C:\\sber\\artifacts\\eval_real_provider\\baseline\\eval_summary.json"
+}

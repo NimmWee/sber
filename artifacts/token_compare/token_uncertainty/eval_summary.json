@@ -1,0 +1,6 @@
+{
+  "pr_auc": 1.0,
+  "sample_size": 4,
+  "model_artifact_path": "C:\\sber\\artifacts\\token_compare\\token_uncertainty\\logistic_head.json",
+  "summary_artifact_path": "C:\\sber\\artifacts\\token_compare\\token_uncertainty\\eval_summary.json"
+}

@@ -1,0 +1,21 @@
+{
+  "feature_names": [
+    "digit_count",
+    "novelty_ratio_proxy",
+    "prompt_response_overlap",
+    "punctuation_count",
+    "response_length",
+    "sentence_count_proxy",
+    "token_count_proxy"
+  ],
+  "weights": [
+    9.626499957677643,
+    0.3961859863062276,
+    -2.2919240287326996,
+    -1.3668899950667093,
+    0.5130440244404695,
+    -1.8957380424264725,
+    0.8319144492372456
+  ],
+  "bias": -1.8957380424264725
+}

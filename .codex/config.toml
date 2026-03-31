@@ -1,0 +1,9 @@
+[project]
+name = "sber"
+
+[paths]
+skills_dir = ".codex/skills"
+agents_dir = ".codex/agents"
+
+[defaults]
+test_command = "pytest"

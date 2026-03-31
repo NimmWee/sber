@@ -1,0 +1,6 @@
+{
+  "pr_auc": 0.5,
+  "sample_size": 4,
+  "model_artifact_path": "C:\\sber\\artifacts\\token_compare\\baseline\\logistic_head.json",
+  "summary_artifact_path": "C:\\sber\\artifacts\\token_compare\\baseline\\eval_summary.json"
+}

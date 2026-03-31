@@ -1,0 +1,6 @@
+{
+  "pr_auc": 0.5833333333333333,
+  "sample_size": 4,
+  "model_artifact_path": "artifacts\\distilgpt2_end_to_end\\token_eval\\logistic_head.json",
+  "summary_artifact_path": "artifacts\\distilgpt2_end_to_end\\token_eval\\eval_summary.json"
+}

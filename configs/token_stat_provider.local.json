@@ -1,0 +1,7 @@
+{
+  "model_id": "distilgpt2",
+  "checkpoint_path": null,
+  "device": "cpu",
+  "torch_dtype": "auto",
+  "response_delimiter": "\n\n### Response:\n"
+}

@@ -1,0 +1,6 @@
+{
+  "model_id": "ai-sage/GigaChat3-10B-A1.8B-bf16",
+  "checkpoint_path": null,
+  "device": "cpu",
+  "torch_dtype": "auto"
+}

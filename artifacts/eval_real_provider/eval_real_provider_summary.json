@@ -1,0 +1,9 @@
+{
+  "model_source": "distilgpt2",
+  "response_delimiter": "\n\n### Response:\n",
+  "baseline_pr_auc": 0.5,
+  "provider_pr_auc": 0.8333333333333333,
+  "pr_auc_delta": 0.33333333333333326,
+  "baseline_summary_artifact_path": "C:\\sber\\artifacts\\eval_real_provider\\baseline\\eval_summary.json",
+  "provider_summary_artifact_path": "C:\\sber\\artifacts\\eval_real_provider\\provider\\eval_summary.json"
+}

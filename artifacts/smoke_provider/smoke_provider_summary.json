@@ -1,0 +1,54 @@
+{
+  "model_source": "distilgpt2",
+  "response_delimiter": "\n\n### Response:\n",
+  "rows": [
+    {
+      "prompt": "What is the capital of Germany?",
+      "response": "Berlin is the capital of Germany.",
+      "token_count": 8,
+      "tokens": [
+        "'Ber'",
+        "'lin'",
+        "'\\u0120is'",
+        "'\\u0120the'",
+        "'\\u0120capital'"
+      ]
+    },
+    {
+      "prompt": "What is the boiling point of water at sea level?",
+      "response": "Water boils at 100 degrees Celsius at sea level.",
+      "token_count": 10,
+      "tokens": [
+        "'Water'",
+        "'\\u0120boils'",
+        "'\\u0120at'",
+        "'\\u0120100'",
+        "'\\u0120degrees'"
+      ]
+    },
+    {
+      "prompt": "What is the capital of Germany?",
+      "response": "The capital of Germany is Munich.",
+      "token_count": 7,
+      "tokens": [
+        "'The'",
+        "'\\u0120capital'",
+        "'\\u0120of'",
+        "'\\u0120Germany'",
+        "'\\u0120is'"
+      ]
+    },
+    {
+      "prompt": "What is the boiling point of water at sea level?",
+      "response": "Water boils at 250 degrees Celsius at sea level.",
+      "token_count": 10,
+      "tokens": [
+        "'Water'",
+        "'\\u0120boils'",
+        "'\\u0120at'",
+        "'\\u0120250'",
+        "'\\u0120degrees'"
+      ]
+    }
+  ]
+}
