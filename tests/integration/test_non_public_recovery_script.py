@@ -75,6 +75,12 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
                 "false_positive_increase": 2,
                 "false_positive_increase_too_much": False,
             },
+            "decision": {
+                "accept_change": True,
+                "rejection_reason": None,
+                "false_positive_limit": 42,
+                "false_positive_increase_too_much": False,
+            },
             "artifact_path": str(artifact_dir / "non_public_recovery_summary.json"),
             "trained_model_artifact_path": str(artifact_dir / "retrained_default_detector_head.json"),
         },
@@ -101,4 +107,5 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
     assert "after_pr_auc=0.6117" in output
     assert "numbers" in output
     assert "false_negatives_decreased=True" in output
+    assert "accept_change=True" in output
     assert "artifact=" in output

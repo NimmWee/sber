@@ -75,6 +75,8 @@ def main() -> None:
         "false_positive_increase_too_much="
         f"{summary['recall_recovery']['false_positive_increase_too_much']}"
     )
+    print(f"accept_change={summary['decision']['accept_change']}")
+    print(f"rejection_reason={summary['decision']['rejection_reason']}")
     print(f"artifact={summary['artifact_path']}")
 
 

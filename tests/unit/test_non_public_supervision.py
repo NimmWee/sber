@@ -33,14 +33,25 @@ def test_build_non_public_supervision_dataset_returns_balanced_taxonomy_and_leak
     assert dataset.summary["sample_size"] >= 300
     assert dataset.summary["train_size"] >= 240
     assert dataset.summary["dev_size"] >= 60
-    assert dataset.summary["positive_count"] == dataset.summary["negative_count"]
+    assert dataset.summary["non_hallucination_count"] > dataset.summary["hallucination_count"]
+    assert dataset.summary["label_balance"]["hallucination_ratio"] < 0.5
     assert dataset.summary["corruption_taxonomy"]["number_nearby"] >= 20
     assert dataset.summary["corruption_taxonomy"]["entity_swap"] >= 20
     assert dataset.summary["corruption_taxonomy"]["place_swap"] >= 20
     assert dataset.summary["corruption_taxonomy"]["organization_or_title_swap"] >= 20
     assert dataset.summary["corruption_taxonomy"]["date_nearby"] >= 20
     assert dataset.summary["long_response_count"] >= 40
+    assert dataset.summary["number_heavy_count"] >= 40
+    assert dataset.summary["entity_heavy_count"] >= 40
+    assert dataset.summary["place_rich_count"] >= 20
+    assert dataset.summary["approximate_or_range_style_count"] >= 20
+    assert dataset.summary["risky_bucket_negative_coverage"]["numbers"] > 0
+    assert dataset.summary["risky_bucket_negative_coverage"]["entity_like_tokens"] > 0
+    assert dataset.summary["risky_bucket_negative_coverage"]["places"] > 0
+    assert dataset.summary["risky_bucket_negative_coverage"]["long_responses"] > 0
+    assert "near_duplicate_count" in dataset.summary
     assert "too_trivial_or_unrealistic_count" in dataset.summary
     assert "flagged_too_trivial_or_unrealistic_examples" in dataset.summary
+    assert "warnings" in dataset.summary
     assert dataset.summary["leakage_checks"]["public_exact_example_overlap_count"] == 0
     assert dataset.summary["leakage_checks"]["public_prompt_overlap_count"] >= 0

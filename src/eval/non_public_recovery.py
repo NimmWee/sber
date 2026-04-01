@@ -94,6 +94,10 @@ def run_non_public_retraining_public_eval(
     false_negative_delta = (
         after_summary["false_negative_count"] - before_summary["false_negative_count"]
     )
+    decision = _build_change_decision(
+        before_summary=before_summary,
+        after_summary=after_summary,
+    )
 
     payload = {
         "dataset_summary": supervision_dataset.summary,
@@ -106,8 +110,9 @@ def run_non_public_retraining_public_eval(
             "false_negatives_decreased": false_negative_delta < 0,
             "false_negative_delta": false_negative_delta,
             "false_positive_increase": false_positive_increase,
-            "false_positive_increase_too_much": false_positive_increase > 25,
+            "false_positive_increase_too_much": decision["false_positive_increase_too_much"],
         },
+        "decision": decision,
         "dev_summary": dev_summary,
         "trained_model_artifact_path": str(trained_model_artifact_path),
         "cached_signal_runtime_ms": cached_signal_runtime_ms,
@@ -208,6 +213,7 @@ def _json_safe_payload(payload: dict) -> dict:
             "bucket_deltas": public_benchmark["bucket_deltas"],
         },
         "recall_recovery": payload["recall_recovery"],
+        "decision": payload["decision"],
         "dev_summary": _serialize_eval_summary(dev_summary),
         "trained_model_artifact_path": payload["trained_model_artifact_path"],
         "cached_signal_runtime_ms": payload["cached_signal_runtime_ms"],
@@ -229,4 +235,41 @@ def _serialize_eval_summary(summary: dict) -> dict:
             asdict(example) for example in summary["hardest_examples"]
         ],
         "head_only_latency_mean_ms": summary["head_only_latency_mean_ms"],
+    }
+
+
+def _build_change_decision(
+    *,
+    before_summary: dict,
+    after_summary: dict,
+) -> dict:
+    false_positive_limit = before_summary["false_positive_count"] + max(
+        10,
+        int(before_summary["false_positive_count"] * 0.2),
+    )
+    pr_auc_improved = after_summary["pr_auc"] > before_summary["pr_auc"]
+    false_negatives_decreased = (
+        after_summary["false_negative_count"] < before_summary["false_negative_count"]
+    )
+    false_positives_controlled = (
+        after_summary["false_positive_count"] <= false_positive_limit
+    )
+
+    rejection_reasons: list[str] = []
+    if not pr_auc_improved:
+        rejection_reasons.append("PR-AUC did not improve")
+    if not false_negatives_decreased:
+        rejection_reasons.append("false negatives did not decrease")
+    if not false_positives_controlled:
+        rejection_reasons.append("false positives increased beyond the control limit")
+
+    return {
+        "accept_change": (
+            pr_auc_improved and false_negatives_decreased and false_positives_controlled
+        ),
+        "rejection_reason": (
+            "; ".join(rejection_reasons) if rejection_reasons else None
+        ),
+        "false_positive_limit": false_positive_limit,
+        "false_positive_increase_too_much": not false_positives_controlled,
     }

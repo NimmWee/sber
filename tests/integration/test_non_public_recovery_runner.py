@@ -102,7 +102,10 @@ def test_run_non_public_retraining_public_eval_writes_before_after_summary(tmp_p
         artifact_dir=tmp_path / "artifacts",
     )
 
-    assert summary["dataset_summary"]["positive_count"] == summary["dataset_summary"]["negative_count"]
+    assert (
+        summary["dataset_summary"]["non_hallucination_count"]
+        > summary["dataset_summary"]["hallucination_count"]
+    )
     assert "before" in summary["public_benchmark"]
     assert "after" in summary["public_benchmark"]
     assert "pr_auc" in summary["public_benchmark"]["before"]
@@ -113,9 +116,12 @@ def test_run_non_public_retraining_public_eval_writes_before_after_summary(tmp_p
     assert "long_responses" in summary["public_benchmark"]["bucket_deltas"]
     assert summary["recall_recovery"]["false_negatives_decreased"] in {True, False}
     assert "false_positive_increase_too_much" in summary["recall_recovery"]
+    assert "accept_change" in summary["decision"]
+    assert "rejection_reason" in summary["decision"]
     assert Path(summary["artifact_path"]).exists()
     assert Path(summary["trained_model_artifact_path"]).exists()
 
     payload = json.loads(Path(summary["artifact_path"]).read_text(encoding="utf-8"))
     assert payload["dataset_summary"]["corruption_taxonomy"]["number_nearby"] > 0
     assert "recall_recovery" in payload
+    assert "decision" in payload

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+import re
 
 from eval.runner import RawLabeledExample
 
@@ -293,6 +294,8 @@ def build_non_public_supervision_dataset(
 
     for seed in SEED_FACTS:
         prompt_variants = _build_prompt_variants(seed.prompt)
+        correct_response_variants = _build_correct_response_variants(seed)
+        hallucinated_response_variants = _build_hallucinated_response_variants(seed)
         if _is_too_trivial_or_unrealistic(seed):
             flagged_examples.append(
                 {
@@ -302,28 +305,30 @@ def build_non_public_supervision_dataset(
                 }
             )
         for prompt_variant in prompt_variants:
-            examples.append(
-                (
-                    RawLabeledExample(
-                        prompt=prompt_variant,
-                        response=seed.positive_response,
-                        label=0,
-                    ),
-                    "clean_positive",
-                    seed.is_long_response,
+            for response_variant in correct_response_variants:
+                examples.append(
+                    (
+                        RawLabeledExample(
+                            prompt=prompt_variant,
+                            response=response_variant,
+                            label=0,
+                        ),
+                        "clean_positive",
+                        seed.is_long_response,
+                    )
                 )
-            )
-            examples.append(
-                (
-                    RawLabeledExample(
-                        prompt=prompt_variant,
-                        response=seed.negative_response,
-                        label=1,
-                    ),
-                    seed.corruption_type,
-                    seed.is_long_response,
+            for response_variant in hallucinated_response_variants:
+                examples.append(
+                    (
+                        RawLabeledExample(
+                            prompt=prompt_variant,
+                            response=response_variant,
+                            label=1,
+                        ),
+                        seed.corruption_type,
+                        seed.is_long_response,
+                    )
                 )
-            )
 
     train_examples: list[RawLabeledExample] = []
     dev_examples: list[RawLabeledExample] = []
@@ -337,6 +342,22 @@ def build_non_public_supervision_dataset(
     long_response_count = 0
     positive_count = 0
     negative_count = 0
+    number_heavy_count = 0
+    entity_heavy_count = 0
+    place_rich_count = 0
+    approximate_or_range_style_count = 0
+    risky_bucket_negative_coverage = {
+        "numbers": 0,
+        "entity_like_tokens": 0,
+        "places": 0,
+        "long_responses": 0,
+    }
+    risky_bucket_positive_coverage = {
+        "numbers": 0,
+        "entity_like_tokens": 0,
+        "places": 0,
+        "long_responses": 0,
+    }
 
     for index, (example, corruption_type, is_long_response) in enumerate(examples):
         if example.label == 0:
@@ -346,12 +367,36 @@ def build_non_public_supervision_dataset(
             corruption_taxonomy[corruption_type] += 1
         if is_long_response:
             long_response_count += 1
+        bucket_flags = _bucket_flags(example.response)
+        if bucket_flags["numbers"]:
+            number_heavy_count += 1
+        if bucket_flags["entity_like_tokens"]:
+            entity_heavy_count += 1
+        if bucket_flags["places"]:
+            place_rich_count += 1
+        if bucket_flags["approximate_or_range_style"]:
+            approximate_or_range_style_count += 1
+        coverage_target = (
+            risky_bucket_negative_coverage if example.label == 0 else risky_bucket_positive_coverage
+        )
+        for bucket_name in ("numbers", "entity_like_tokens", "places", "long_responses"):
+            if bucket_flags[bucket_name]:
+                coverage_target[bucket_name] += 1
 
         if index % 5 == 0:
             dev_examples.append(example)
         else:
             train_examples.append(example)
 
+    duplicate_and_near_duplicate = _duplicate_diagnostics(train_examples + dev_examples)
+    warnings = _dataset_warnings(
+        non_hallucination_count=positive_count,
+        hallucination_count=negative_count,
+        risky_bucket_negative_coverage=risky_bucket_negative_coverage,
+        risky_bucket_positive_coverage=risky_bucket_positive_coverage,
+        too_trivial_or_unrealistic_count=len(flagged_examples),
+        sample_size=len(train_examples) + len(dev_examples),
+    )
     leakage_checks = _compute_leakage_checks(
         supervision_examples=train_examples + dev_examples,
         public_eval_examples=public_eval_examples or [],
@@ -362,14 +407,27 @@ def build_non_public_supervision_dataset(
         "dev_size": len(dev_examples),
         "positive_count": positive_count,
         "negative_count": negative_count,
+        "non_hallucination_count": positive_count,
+        "hallucination_count": negative_count,
         "label_balance": {
             "positive_ratio": positive_count / (positive_count + negative_count),
             "negative_ratio": negative_count / (positive_count + negative_count),
+            "non_hallucination_ratio": positive_count / (positive_count + negative_count),
+            "hallucination_ratio": negative_count / (positive_count + negative_count),
         },
         "long_response_count": long_response_count,
+        "number_heavy_count": number_heavy_count,
+        "entity_heavy_count": entity_heavy_count,
+        "place_rich_count": place_rich_count,
+        "approximate_or_range_style_count": approximate_or_range_style_count,
+        "risky_bucket_negative_coverage": risky_bucket_negative_coverage,
+        "risky_bucket_positive_coverage": risky_bucket_positive_coverage,
         "corruption_taxonomy": corruption_taxonomy,
         "too_trivial_or_unrealistic_count": len(flagged_examples),
         "flagged_too_trivial_or_unrealistic_examples": flagged_examples,
+        "duplicate_count": duplicate_and_near_duplicate["duplicate_count"],
+        "near_duplicate_count": duplicate_and_near_duplicate["near_duplicate_count"],
+        "warnings": warnings,
         "leakage_checks": leakage_checks,
     }
     return NonPublicSupervisionDataset(
@@ -383,11 +441,39 @@ def _build_prompt_variants(base_prompt: str) -> tuple[str, ...]:
     stripped = base_prompt.rstrip(" ?.")
     return (
         base_prompt,
-        f"Answer briefly: {base_prompt}",
-        f"Give a factual one-sentence answer: {base_prompt}",
-        f"State the correct fact only: {stripped}.",
-        f"For a fact-checking benchmark, answer precisely: {base_prompt}",
+        f"Give a factual answer only: {stripped}.",
     )
+
+
+def _build_correct_response_variants(seed: SeedFact) -> tuple[str, ...]:
+    variants = [
+        seed.positive_response,
+        f"The correct factual answer is: {seed.positive_response}",
+    ]
+    if seed.is_long_response:
+        variants.append(f"In a concise factual summary, {seed.positive_response}")
+    else:
+        variants.append(f"For a precise answer, {seed.positive_response}")
+
+    approximate_variant = _make_approximate_or_range_variant(seed.positive_response)
+    if approximate_variant is not None:
+        variants.append(approximate_variant)
+
+    entity_dense_variant = _make_entity_dense_correct_variant(seed)
+    if entity_dense_variant is not None:
+        variants.append(entity_dense_variant)
+
+    return _dedupe_ordered(variants)
+
+
+def _build_hallucinated_response_variants(seed: SeedFact) -> tuple[str, ...]:
+    variants = [
+        seed.negative_response,
+        f"A concise answer is: {seed.negative_response}",
+    ]
+    if seed.is_long_response:
+        variants.append(f"In a confident summary, {seed.negative_response}")
+    return _dedupe_ordered(variants)
 
 
 def _is_too_trivial_or_unrealistic(seed: SeedFact) -> bool:
@@ -398,6 +484,111 @@ def _is_too_trivial_or_unrealistic(seed: SeedFact) -> bool:
     if len(negative.split()) < 4:
         return True
     return SequenceMatcher(a=positive, b=negative).ratio() > 0.985
+
+
+def _make_approximate_or_range_variant(response: str) -> str | None:
+    match = re.search(r"\b\d{1,4}(?:\.\d+)?\b", response)
+    if match is None:
+        return None
+    number_text = match.group(0)
+    if re.fullmatch(r"\d{4}", number_text):
+        replacement = f"around {number_text}"
+    else:
+        replacement = f"approximately {number_text}"
+    return response[: match.start()] + replacement + response[match.end() :]
+
+
+def _make_entity_dense_correct_variant(seed: SeedFact) -> str | None:
+    if seed.corruption_type in {"entity_swap", "place_swap", "organization_or_title_swap"}:
+        return f"Historically and factually, {seed.positive_response}"
+    if seed.is_long_response:
+        return f"For a fact-focused overview, {seed.positive_response}"
+    return None
+
+
+def _dedupe_ordered(values: list[str]) -> tuple[str, ...]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = " ".join(value.split())
+        if normalized not in seen:
+            seen.add(normalized)
+            deduped.append(normalized)
+    return tuple(deduped)
+
+
+def _bucket_flags(response: str) -> dict[str, bool]:
+    token_count = len(re.findall(r"\w+", response))
+    capitalized_tokens = re.findall(r"\b[A-Z][a-zA-Z-]+\b", response)
+    place_match = re.search(
+        r"\b(?:in|at|from|to|near|around)\s+[A-Z][a-zA-Z-]+(?:\s+[A-Z][a-zA-Z-]+)*\b",
+        response,
+    )
+    approximate_match = re.search(
+        r"\b(?:about|around|approximately|roughly|between|from)\b",
+        response.lower(),
+    )
+    return {
+        "numbers": bool(re.search(r"\d", response)),
+        "entity_like_tokens": len(capitalized_tokens) >= 2,
+        "places": place_match is not None,
+        "long_responses": token_count > 18,
+        "approximate_or_range_style": approximate_match is not None,
+    }
+
+
+def _duplicate_diagnostics(
+    examples: list[RawLabeledExample],
+) -> dict[str, int]:
+    exact_pairs = set()
+    duplicate_count = 0
+    near_duplicate_count = 0
+    grouped_by_prompt_and_label: dict[tuple[str, int], list[str]] = {}
+    for example in examples:
+        pair = (example.prompt.strip(), example.response.strip(), example.label)
+        if pair in exact_pairs:
+            duplicate_count += 1
+        else:
+            exact_pairs.add(pair)
+        grouped_by_prompt_and_label.setdefault(
+            (example.prompt.strip(), example.label),
+            [],
+        ).append(example.response.strip())
+
+    for responses in grouped_by_prompt_and_label.values():
+        for index, left in enumerate(responses):
+            for right in responses[index + 1 :]:
+                if SequenceMatcher(a=left, b=right).ratio() > 0.985:
+                    near_duplicate_count += 1
+    return {
+        "duplicate_count": duplicate_count,
+        "near_duplicate_count": near_duplicate_count,
+    }
+
+
+def _dataset_warnings(
+    *,
+    non_hallucination_count: int,
+    hallucination_count: int,
+    risky_bucket_negative_coverage: dict[str, int],
+    risky_bucket_positive_coverage: dict[str, int],
+    too_trivial_or_unrealistic_count: int,
+    sample_size: int,
+) -> list[str]:
+    warnings: list[str] = []
+    hallucination_ratio = hallucination_count / max(sample_size, 1)
+    if hallucination_ratio >= 0.48:
+        warnings.append("hallucination ratio is high and may inflate false positives")
+    for bucket_name, negative_coverage in risky_bucket_negative_coverage.items():
+        if negative_coverage <= risky_bucket_positive_coverage[bucket_name]:
+            warnings.append(
+                f"correct coverage for {bucket_name} is not stronger than hallucinated coverage"
+            )
+    if too_trivial_or_unrealistic_count / max(sample_size, 1) > 0.05:
+        warnings.append("too many examples are flagged as trivial or unrealistic")
+    if non_hallucination_count <= hallucination_count:
+        warnings.append("non-hallucination examples should dominate to reduce false positives")
+    return warnings
 
 
 def _compute_leakage_checks(
