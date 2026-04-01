@@ -41,6 +41,8 @@ class InternalModelSignal:
     last_layer_pooled_mean_abs: float
     selected_layer_norm_variance: float
     layer_disagreement_mean: float
+    selected_layer_disagreement_max: float = 0.0
+    early_late_layer_consistency: float = 0.0
 
 
 class StructuralFeatureExtractor:
@@ -49,11 +51,13 @@ class StructuralFeatureExtractor:
         enable_uncertainty_proxies: bool = False,
         enable_token_uncertainty: bool = False,
         enable_internal_features: bool = False,
+        enable_compact_internal_enhancements: bool = False,
         token_feature_groups: tuple[str, ...] | None = None,
     ) -> None:
         self.enable_uncertainty_proxies = enable_uncertainty_proxies
         self.enable_token_uncertainty = enable_token_uncertainty
         self.enable_internal_features = enable_internal_features
+        self.enable_compact_internal_enhancements = enable_compact_internal_enhancements
         self.token_feature_groups = token_feature_groups
 
     def extract(
@@ -112,6 +116,13 @@ class StructuralFeatureExtractor:
             )
         if self.enable_internal_features and internal_signal is not None:
             features.update(self._extract_internal_features(internal_signal))
+            if self.enable_compact_internal_enhancements:
+                features.update(
+                    self._extract_compact_internal_enhancements(
+                        token_stats=token_stats or [],
+                        internal_signal=internal_signal,
+                    )
+                )
         return features
 
     @staticmethod
@@ -130,6 +141,37 @@ class StructuralFeatureExtractor:
             ),
             "internal_layer_disagreement_mean": float(
                 internal_signal.layer_disagreement_mean
+            ),
+        }
+
+    @staticmethod
+    def _extract_compact_internal_enhancements(
+        *,
+        token_stats: list[TokenUncertaintyStat],
+        internal_signal: InternalModelSignal,
+    ) -> dict[str, float]:
+        base_uncertainty = StructuralFeatureExtractor._extract_token_uncertainty_base(
+            token_stats
+        )
+        token_entropy_mean = float(base_uncertainty["token_entropy_mean"])
+        token_tail_low_confidence_rate = float(
+            base_uncertainty["token_tail_low_confidence_rate"]
+        )
+        return {
+            "internal_selected_layer_disagreement_max": float(
+                internal_signal.selected_layer_disagreement_max
+            ),
+            "internal_early_late_layer_consistency": float(
+                internal_signal.early_late_layer_consistency
+            ),
+            "internal_entropy_disagreement_gap": float(
+                abs(token_entropy_mean - internal_signal.layer_disagreement_mean)
+            ),
+            "internal_low_confidence_disagreement_gap": float(
+                abs(
+                    token_tail_low_confidence_rate
+                    - internal_signal.layer_disagreement_mean
+                )
             ),
         }
 

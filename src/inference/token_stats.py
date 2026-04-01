@@ -236,6 +236,15 @@ class TransformersTokenStatProvider:
                 if layer_disagreements
                 else 0.0
             ),
+            selected_layer_disagreement_max=float(
+                max(layer_disagreements) if layer_disagreements else 0.0
+            ),
+            early_late_layer_consistency=float(
+                self._cosine_similarity(
+                    selected_layers[0][0, response_token_indices, :].mean(dim=0),
+                    selected_layers[-1][0, response_token_indices, :].mean(dim=0),
+                )
+            ),
         )
 
     def _select_hidden_layers(
@@ -382,6 +391,14 @@ class TransformersTokenStatProvider:
             return 0.0
         mean = sum(values) / len(values)
         return sum((value - mean) ** 2 for value in values) / len(values)
+
+    @staticmethod
+    def _cosine_similarity(first_vector: torch.Tensor, second_vector: torch.Tensor) -> float:
+        first_norm = float(first_vector.norm().item())
+        second_norm = float(second_vector.norm().item())
+        if first_norm == 0.0 or second_norm == 0.0:
+            return 0.0
+        return float(torch.dot(first_vector, second_vector).item() / (first_norm * second_norm))
 
 
 class GigaChatTokenStatProvider(TransformersTokenStatProvider):

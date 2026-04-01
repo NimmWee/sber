@@ -77,6 +77,13 @@ INTERNAL_FEATURES = {
     "internal_layer_disagreement_mean",
 }
 
+ENHANCED_INTERNAL_FEATURES = {
+    "internal_selected_layer_disagreement_max",
+    "internal_early_late_layer_consistency",
+    "internal_entropy_disagreement_gap",
+    "internal_low_confidence_disagreement_gap",
+}
+
 
 def _token_stats() -> list[TokenUncertaintyStat]:
     return [
@@ -511,3 +518,71 @@ def test_internal_features_are_only_present_when_enabled_and_provided() -> None:
     assert INTERNAL_FEATURES.isdisjoint(disabled.keys())
     assert INTERNAL_FEATURES.isdisjoint(enabled_without_signal.keys())
     assert INTERNAL_FEATURES.issubset(enabled_with_signal.keys())
+
+
+def test_extract_with_compact_internal_enhancements_is_finite_and_schema_visible() -> None:
+    extractor = StructuralFeatureExtractor(
+        enable_token_uncertainty=True,
+        enable_internal_features=True,
+        enable_compact_internal_enhancements=True,
+        token_feature_groups=("base_token_uncertainty",),
+    )
+    token_stats = _extended_token_stats()
+    internal_signal = InternalModelSignal(
+        last_layer_pooled_l2=1.25,
+        last_layer_pooled_mean_abs=0.42,
+        selected_layer_norm_variance=0.08,
+        layer_disagreement_mean=0.12,
+        selected_layer_disagreement_max=0.18,
+        early_late_layer_consistency=0.84,
+    )
+
+    features = extractor.extract(
+        prompt="State the travel details.",
+        response="Alice visited Paris on 2024-01-15 with 3 companions yesterday.",
+        token_stats=token_stats,
+        internal_signal=internal_signal,
+    )
+
+    assert INTERNAL_FEATURES.issubset(features.keys())
+    assert ENHANCED_INTERNAL_FEATURES.issubset(features.keys())
+    assert all(math.isfinite(features[name]) for name in ENHANCED_INTERNAL_FEATURES)
+
+
+def test_compact_internal_enhancements_are_only_present_when_enabled() -> None:
+    prompt = "State the travel details."
+    response = "Alice visited Paris on 2024-01-15 with 3 companions yesterday."
+    token_stats = _extended_token_stats()
+    internal_signal = InternalModelSignal(
+        last_layer_pooled_l2=1.25,
+        last_layer_pooled_mean_abs=0.42,
+        selected_layer_norm_variance=0.08,
+        layer_disagreement_mean=0.12,
+        selected_layer_disagreement_max=0.18,
+        early_late_layer_consistency=0.84,
+    )
+
+    baseline = StructuralFeatureExtractor(
+        enable_token_uncertainty=True,
+        enable_internal_features=True,
+        token_feature_groups=("base_token_uncertainty",),
+    ).extract(
+        prompt=prompt,
+        response=response,
+        token_stats=token_stats,
+        internal_signal=internal_signal,
+    )
+    enriched = StructuralFeatureExtractor(
+        enable_token_uncertainty=True,
+        enable_internal_features=True,
+        enable_compact_internal_enhancements=True,
+        token_feature_groups=("base_token_uncertainty",),
+    ).extract(
+        prompt=prompt,
+        response=response,
+        token_stats=token_stats,
+        internal_signal=internal_signal,
+    )
+
+    assert ENHANCED_INTERNAL_FEATURES.isdisjoint(baseline.keys())
+    assert ENHANCED_INTERNAL_FEATURES.issubset(enriched.keys())

@@ -11,6 +11,8 @@ if str(SRC_ROOT) not in sys.path:
 from eval.public_benchmark_ablation import run_public_benchmark_ablation
 from eval.runner import RawLabeledExample
 from features.extractor import TokenUncertaintyStat
+from inference.token_stats import CollectedModelSignals
+from features.extractor import InternalModelSignal
 
 
 class FakeTokenStatProvider:
@@ -24,6 +26,33 @@ class FakeTokenStatProvider:
             TokenUncertaintyStat("correct", -0.1, 0.2, 0.7),
             TokenUncertaintyStat("fact", -0.15, 0.25, 0.6),
         ]
+
+
+class CountingSignalProvider:
+    def __init__(self) -> None:
+        self.collect_calls = 0
+        self.collect_signals_calls = 0
+
+    def collect(self, prompt: str, response: str):
+        self.collect_calls += 1
+        return self.collect_signals(prompt=prompt, response=response).token_stats
+
+    def collect_signals(self, prompt: str, response: str):
+        self.collect_signals_calls += 1
+        return CollectedModelSignals(
+            token_stats=[
+                TokenUncertaintyStat("fact", -0.1, 0.2, 0.7),
+                TokenUncertaintyStat("wrong", -1.0, 0.8, 0.1),
+            ],
+            internal_signal=InternalModelSignal(
+                last_layer_pooled_l2=1.2,
+                last_layer_pooled_mean_abs=0.4,
+                selected_layer_norm_variance=0.08,
+                layer_disagreement_mean=0.12,
+                selected_layer_disagreement_max=0.16,
+                early_late_layer_consistency=0.82,
+            ),
+        )
 
 
 def test_run_public_benchmark_ablation_writes_summary(tmp_path) -> None:
@@ -55,3 +84,29 @@ def test_run_public_benchmark_ablation_writes_summary(tmp_path) -> None:
     assert "internal_features_lightgbm" in summary["variants"]
     assert "best_variant" in summary
     assert Path(summary["artifact_path"]).exists()
+
+
+def test_run_public_benchmark_ablation_reuses_cached_model_signals(tmp_path) -> None:
+    csv_path = tmp_path / "knowledge_bench_public.csv"
+    csv_path.write_text(
+        "prompt,model_answer,is_hallucination,correct_answer,comment\n"
+        "Q1,Correct answer,False,Ref,\n"
+        "Q2,Wrong answer,True,Ref,\n",
+        encoding="utf-8",
+    )
+    provider = CountingSignalProvider()
+    train_examples = [
+        RawLabeledExample(prompt="Q1", response="Correct answer", label=0),
+        RawLabeledExample(prompt="Q2", response="Wrong answer", label=1),
+    ]
+
+    summary = run_public_benchmark_ablation(
+        dataset_path=csv_path,
+        train_examples=train_examples,
+        token_stat_provider=provider,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    assert provider.collect_signals_calls == 4
+    assert Path(summary["cached_signal_artifact_path"]).exists()
+    assert summary["estimated_signal_runtime_improvement_ms"] >= 0.0

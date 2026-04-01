@@ -30,12 +30,33 @@ def run_public_benchmark_ablation(
     validation_examples = load_public_benchmark_examples(dataset_path)
     output_dir = Path(artifact_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    signal_provider = _resolve_internal_provider(token_stat_provider)
+    cache_start = time.perf_counter()
+    cached_train_examples = _cache_model_signals(
+        examples=train_examples,
+        token_stat_provider=signal_provider,
+    )
+    cached_validation_examples = _cache_model_signals(
+        examples=validation_examples,
+        token_stat_provider=signal_provider,
+    )
+    signal_collection_runtime_ms = (time.perf_counter() - cache_start) * 1000.0
+    cached_signal_artifact_path = write_json_artifact(
+        artifact_dir=output_dir,
+        filename="cached_model_signals.json",
+        payload={
+            "train": [_serialize_cached_example(example) for example in cached_train_examples],
+            "validation": [
+                _serialize_cached_example(example) for example in cached_validation_examples
+            ],
+        },
+    )
 
     base_variant = _evaluate_variant(
         name="base_token_uncertainty",
-        train_examples=train_examples,
-        validation_examples=validation_examples,
-        token_stat_provider=token_stat_provider,
+        train_examples=cached_train_examples,
+        validation_examples=cached_validation_examples,
+        token_stat_provider=signal_provider,
         extractor=StructuralFeatureExtractor(
             enable_token_uncertainty=True,
             token_feature_groups=DEFAULT_TOKEN_FEATURE_GROUPS,
@@ -46,9 +67,9 @@ def run_public_benchmark_ablation(
     )
     extended_variant = _evaluate_variant(
         name="extended_token_uncertainty",
-        train_examples=train_examples,
-        validation_examples=validation_examples,
-        token_stat_provider=token_stat_provider,
+        train_examples=cached_train_examples,
+        validation_examples=cached_validation_examples,
+        token_stat_provider=signal_provider,
         extractor=StructuralFeatureExtractor(
             enable_token_uncertainty=True,
             token_feature_groups=(
@@ -71,9 +92,9 @@ def run_public_benchmark_ablation(
     )
     internal_variant = _evaluate_variant(
         name="internal_features",
-        train_examples=train_examples,
-        validation_examples=validation_examples,
-        token_stat_provider=_resolve_internal_provider(token_stat_provider),
+        train_examples=cached_train_examples,
+        validation_examples=cached_validation_examples,
+        token_stat_provider=signal_provider,
         extractor=StructuralFeatureExtractor(
             enable_token_uncertainty=True,
             enable_internal_features=True,
@@ -93,9 +114,9 @@ def run_public_benchmark_ablation(
 
     stronger_head_variant = _evaluate_variant(
         name="extended_token_uncertainty_stronger_head",
-        train_examples=train_examples,
-        validation_examples=validation_examples,
-        token_stat_provider=token_stat_provider,
+        train_examples=cached_train_examples,
+        validation_examples=cached_validation_examples,
+        token_stat_provider=signal_provider,
         extractor=StructuralFeatureExtractor(
             enable_token_uncertainty=True,
             token_feature_groups=(
@@ -121,9 +142,9 @@ def run_public_benchmark_ablation(
     variants[stronger_head_variant["name"]] = stronger_head_variant
     lightgbm_variant = _evaluate_variant(
         name="internal_features_lightgbm",
-        train_examples=train_examples,
-        validation_examples=validation_examples,
-        token_stat_provider=_resolve_internal_provider(token_stat_provider),
+        train_examples=cached_train_examples,
+        validation_examples=cached_validation_examples,
+        token_stat_provider=signal_provider,
         extractor=StructuralFeatureExtractor(
             enable_token_uncertainty=True,
             enable_internal_features=True,
@@ -136,6 +157,24 @@ def run_public_benchmark_ablation(
         head_kind="lightgbm",
     )
     variants[lightgbm_variant["name"]] = lightgbm_variant
+    improved_lightgbm_variant = _evaluate_variant(
+        name="improved_internal_features_lightgbm",
+        train_examples=cached_train_examples,
+        validation_examples=cached_validation_examples,
+        token_stat_provider=signal_provider,
+        extractor=StructuralFeatureExtractor(
+            enable_token_uncertainty=True,
+            enable_internal_features=True,
+            enable_compact_internal_enhancements=True,
+            token_feature_groups=("base_token_uncertainty",),
+        ),
+        allowed_token_groups=("base_token_uncertainty",),
+        include_internal_features=True,
+        artifact_dir=output_dir / "improved_internal_features_lightgbm",
+        latency_repeat_count=latency_repeat_count,
+        head_kind="lightgbm",
+    )
+    variants[improved_lightgbm_variant["name"]] = improved_lightgbm_variant
 
     best_variant_name = max(
         variants,
@@ -153,9 +192,13 @@ def run_public_benchmark_ablation(
 
     payload = {
         "dataset_path": str(Path(dataset_path)),
-        "sample_size": len(validation_examples),
+        "sample_size": len(cached_validation_examples),
         "variants": variants,
         "best_variant": best_variant_name,
+        "cached_signal_artifact_path": str(cached_signal_artifact_path),
+        "signal_collection_runtime_ms": signal_collection_runtime_ms,
+        "estimated_signal_runtime_improvement_ms": signal_collection_runtime_ms
+        * (len(variants) - 1),
     }
     artifact_path = write_json_artifact(
         artifact_dir=output_dir,
@@ -238,11 +281,9 @@ def _evaluate_variant(
     head.save(model_artifact_path)
     latency_total_mean_ms = _measure_variant_latency(
         example=validation_examples[0],
-        token_stat_provider=token_stat_provider,
         extractor=extractor,
         head=head,
         repeat_count=latency_repeat_count,
-        include_internal_features=include_internal_features,
     )
     summary_artifact_path = write_json_artifact(
         artifact_dir=artifact_dir,
@@ -285,7 +326,9 @@ def _prepare_feature_rows(
     for example in examples:
         token_stats = example.token_stats
         internal_signal = example.internal_signal
-        if include_internal_features:
+        if include_internal_features and (
+            token_stats is None or internal_signal is None
+        ):
             token_stats, internal_signal = _collect_signals(
                 token_stat_provider=token_stat_provider,
                 prompt=example.prompt,
@@ -327,40 +370,66 @@ def _resolve_internal_provider(token_stat_provider):
     return token_stat_provider
 
 
+def _cache_model_signals(
+    *,
+    examples: list[RawLabeledExample],
+    token_stat_provider,
+) -> list[RawLabeledExample]:
+    cached_examples: list[RawLabeledExample] = []
+    for example in examples:
+        token_stats, internal_signal = _collect_signals(
+            token_stat_provider=token_stat_provider,
+            prompt=example.prompt,
+            response=example.response,
+        )
+        cached_examples.append(
+            RawLabeledExample(
+                prompt=example.prompt,
+                response=example.response,
+                label=example.label,
+                token_stats=token_stats,
+                internal_signal=internal_signal,
+            )
+        )
+    return cached_examples
+
+
+def _serialize_cached_example(example: RawLabeledExample) -> dict:
+    return {
+        "prompt": example.prompt,
+        "response": example.response,
+        "label": example.label,
+        "token_stats": [
+            {
+                "token": stat.token,
+                "logprob": stat.logprob,
+                "entropy": stat.entropy,
+                "top1_top2_margin": stat.top1_top2_margin,
+            }
+            for stat in (example.token_stats or [])
+        ],
+        "internal_signal": (
+            asdict(example.internal_signal) if example.internal_signal is not None else None
+        ),
+    }
+
+
 def _measure_variant_latency(
     *,
     example: RawLabeledExample,
-    token_stat_provider,
     extractor: StructuralFeatureExtractor,
     head,
     repeat_count: int,
-    include_internal_features: bool,
 ) -> float:
     samples_ms: list[float] = []
     for _ in range(repeat_count):
         start = time.perf_counter()
-        if include_internal_features:
-            token_stats, internal_signal = _collect_signals(
-                token_stat_provider=token_stat_provider,
-                prompt=example.prompt,
-                response=example.response,
-            )
-            features = extractor.extract(
-                prompt=example.prompt,
-                response=example.response,
-                token_stats=token_stats,
-                internal_signal=internal_signal,
-            )
-        else:
-            token_stats = token_stat_provider.collect(
-                prompt=example.prompt,
-                response=example.response,
-            )
-            features = extractor.extract(
-                prompt=example.prompt,
-                response=example.response,
-                token_stats=token_stats,
-            )
+        features = extractor.extract(
+            prompt=example.prompt,
+            response=example.response,
+            token_stats=example.token_stats,
+            internal_signal=example.internal_signal,
+        )
         head.predict_proba(features)
         samples_ms.append((time.perf_counter() - start) * 1000.0)
     return sum(samples_ms) / len(samples_ms) if samples_ms else 0.0

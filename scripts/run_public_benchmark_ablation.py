@@ -54,6 +54,14 @@ def main() -> None:
     print(f"model={config.model_source}")
     print(f"sample_size={summary['sample_size']}")
     print(f"best_variant={summary['best_variant']}")
+    print(
+        "signal_collection_runtime_ms="
+        f"{summary.get('signal_collection_runtime_ms', 0.0):.4f}"
+    )
+    print(
+        "estimated_signal_runtime_improvement_ms="
+        f"{summary.get('estimated_signal_runtime_improvement_ms', 0.0):.4f}"
+    )
     for variant_name, variant in summary["variants"].items():
         print(
             f"{variant_name} "

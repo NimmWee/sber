@@ -440,6 +440,8 @@ def test_provider_collect_signals_returns_internal_signal_when_enabled() -> None
     assert collected.internal_signal.last_layer_pooled_l2 > 0.0
     assert collected.internal_signal.selected_layer_norm_variance >= 0.0
     assert collected.internal_signal.layer_disagreement_mean >= 0.0
+    assert collected.internal_signal.selected_layer_disagreement_max >= 0.0
+    assert -1.0 <= collected.internal_signal.early_late_layer_consistency <= 1.0
 
 
 def test_provider_collect_signals_is_deterministic_and_finite() -> None:
