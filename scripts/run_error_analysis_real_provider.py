@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict, is_dataclass
 import sys
 from pathlib import Path
 
@@ -72,7 +73,14 @@ def main() -> None:
             "false_positive_count": summary.false_positive_count,
             "false_negative_count": summary.false_negative_count,
             "non_trivial_buckets": summary.non_trivial_buckets,
-            "focused_bucket_summaries": summary.focused_bucket_summaries,
+            "focused_bucket_summaries": {
+                bucket_name: (
+                    asdict(bucket_summary)
+                    if is_dataclass(bucket_summary)
+                    else dict(bucket_summary)
+                )
+                for bucket_name, bucket_summary in summary.focused_bucket_summaries.items()
+            },
             "recommended_next_improvement": summary.recommended_next_improvement,
             "hardest_examples": [
                 {
