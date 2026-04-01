@@ -58,10 +58,22 @@ def main() -> None:
     print(f"dataset={dataset_path}")
     print(f"model={config.model_source}")
     print(f"dataset_size={summary['dataset_summary']['sample_size']}")
-    print(f"positive_count={summary['dataset_summary']['positive_count']}")
-    print(f"negative_count={summary['dataset_summary']['negative_count']}")
+    print(f"non_hallucination_count={summary['dataset_summary']['non_hallucination_count']}")
+    print(f"hallucination_count={summary['dataset_summary']['hallucination_count']}")
     print(f"before_pr_auc={summary['public_benchmark']['before']['pr_auc']:.4f}")
     print(f"after_pr_auc={summary['public_benchmark']['after']['pr_auc']:.4f}")
+    print(f"before_precision={summary['public_benchmark']['before']['precision']:.4f}")
+    print(f"after_precision={summary['public_benchmark']['after']['precision']:.4f}")
+    print(f"before_recall={summary['public_benchmark']['before']['recall']:.4f}")
+    print(f"after_recall={summary['public_benchmark']['after']['recall']:.4f}")
+    print(
+        "before_predicted_positive_rate="
+        f"{summary['public_benchmark']['before']['predicted_positive_rate']:.4f}"
+    )
+    print(
+        "after_predicted_positive_rate="
+        f"{summary['public_benchmark']['after']['predicted_positive_rate']:.4f}"
+    )
     print(f"before_false_positives={summary['public_benchmark']['before']['false_positive_count']}")
     print(f"before_false_negatives={summary['public_benchmark']['before']['false_negative_count']}")
     print(f"after_false_positives={summary['public_benchmark']['after']['false_positive_count']}")
@@ -75,6 +87,7 @@ def main() -> None:
         "false_positive_increase_too_much="
         f"{summary['recall_recovery']['false_positive_increase_too_much']}"
     )
+    print(f"precision_change={summary['precision_change']:.4f}")
     print(f"accept_change={summary['decision']['accept_change']}")
     print(f"rejection_reason={summary['decision']['rejection_reason']}")
     print(f"artifact={summary['artifact_path']}")

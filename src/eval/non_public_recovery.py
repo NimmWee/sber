@@ -112,6 +112,7 @@ def run_non_public_retraining_public_eval(
             "false_positive_increase": false_positive_increase,
             "false_positive_increase_too_much": decision["false_positive_increase_too_much"],
         },
+        "precision_change": after_summary["precision"] - before_summary["precision"],
         "decision": decision,
         "dev_summary": dev_summary,
         "trained_model_artifact_path": str(trained_model_artifact_path),
@@ -190,11 +191,20 @@ def _evaluate_head_on_public_examples(
         if feature_rows
         else 0.0
     )
+    metrics = _binary_metrics(labels=labels, probabilities=probabilities)
+    bucket_predicted_positive_rates = _bucket_predicted_positive_rates(
+        examples=examples,
+        probabilities=probabilities,
+    )
     return {
         "pr_auc": pr_auc,
         "sample_size": len(examples),
         "false_positive_count": error_summary.false_positive_count,
         "false_negative_count": error_summary.false_negative_count,
+        "precision": metrics["precision"],
+        "recall": metrics["recall"],
+        "predicted_positive_rate": metrics["predicted_positive_rate"],
+        "bucket_predicted_positive_rates": bucket_predicted_positive_rates,
         "non_trivial_buckets": error_summary.non_trivial_buckets,
         "bucket_summaries": error_summary.bucket_summaries,
         "hardest_examples": error_summary.hardest_examples,
@@ -213,6 +223,7 @@ def _json_safe_payload(payload: dict) -> dict:
             "bucket_deltas": public_benchmark["bucket_deltas"],
         },
         "recall_recovery": payload["recall_recovery"],
+        "precision_change": payload["precision_change"],
         "decision": payload["decision"],
         "dev_summary": _serialize_eval_summary(dev_summary),
         "trained_model_artifact_path": payload["trained_model_artifact_path"],
@@ -226,6 +237,10 @@ def _serialize_eval_summary(summary: dict) -> dict:
         "sample_size": summary["sample_size"],
         "false_positive_count": summary["false_positive_count"],
         "false_negative_count": summary["false_negative_count"],
+        "precision": summary["precision"],
+        "recall": summary["recall"],
+        "predicted_positive_rate": summary["predicted_positive_rate"],
+        "bucket_predicted_positive_rates": summary["bucket_predicted_positive_rates"],
         "non_trivial_buckets": summary["non_trivial_buckets"],
         "bucket_summaries": {
             name: asdict(bucket_summary)
@@ -273,3 +288,92 @@ def _build_change_decision(
         "false_positive_limit": false_positive_limit,
         "false_positive_increase_too_much": not false_positives_controlled,
     }
+
+
+def _binary_metrics(
+    *,
+    labels: list[int],
+    probabilities: list[float],
+    threshold: float = 0.5,
+) -> dict[str, float]:
+    true_positives = 0
+    false_positives = 0
+    false_negatives = 0
+    predicted_positive_count = 0
+
+    for label, probability in zip(labels, probabilities):
+        predicted_label = 1 if probability >= threshold else 0
+        if predicted_label == 1:
+            predicted_positive_count += 1
+        if predicted_label == 1 and label == 1:
+            true_positives += 1
+        elif predicted_label == 1 and label == 0:
+            false_positives += 1
+        elif predicted_label == 0 and label == 1:
+            false_negatives += 1
+
+    precision_denominator = true_positives + false_positives
+    recall_denominator = true_positives + false_negatives
+    return {
+        "precision": (
+            true_positives / precision_denominator
+            if precision_denominator
+            else 0.0
+        ),
+        "recall": (
+            true_positives / recall_denominator
+            if recall_denominator
+            else 0.0
+        ),
+        "predicted_positive_rate": (
+            predicted_positive_count / len(labels) if labels else 0.0
+        ),
+    }
+
+
+def _bucket_predicted_positive_rates(
+    *,
+    examples: list[RawLabeledExample],
+    probabilities: list[float],
+    threshold: float = 0.5,
+) -> dict[str, float]:
+    total_counts = {
+        "numbers": 0,
+        "entity_like_tokens": 0,
+        "places": 0,
+        "long_responses": 0,
+    }
+    predicted_positive_counts = {bucket_name: 0 for bucket_name in total_counts}
+
+    for example, probability in zip(examples, probabilities):
+        buckets = _summary_buckets(example)
+        predicted_positive = probability >= threshold
+        for bucket_name in buckets:
+            total_counts[bucket_name] += 1
+            if predicted_positive:
+                predicted_positive_counts[bucket_name] += 1
+
+    return {
+        bucket_name: (
+            predicted_positive_counts[bucket_name] / total_counts[bucket_name]
+            if total_counts[bucket_name]
+            else 0.0
+        )
+        for bucket_name in total_counts
+    }
+
+
+def _summary_buckets(example: RawLabeledExample) -> list[str]:
+    buckets: list[str] = []
+    if any(character.isdigit() for character in example.response):
+        buckets.append("numbers")
+    if sum(token[:1].isupper() for token in example.response.split()) >= 2:
+        buckets.append("entity_like_tokens")
+    if any(
+        cue in example.prompt.lower()
+        for cue in ("capital", "city", "country", "located", "location", "place")
+    ):
+        buckets.append("places")
+    if len(example.response.split()) > 8:
+        buckets.append("long_responses")
+    return buckets

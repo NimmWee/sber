@@ -102,14 +102,17 @@ def test_run_non_public_retraining_public_eval_writes_before_after_summary(tmp_p
         artifact_dir=tmp_path / "artifacts",
     )
 
-    assert (
-        summary["dataset_summary"]["non_hallucination_count"]
-        > summary["dataset_summary"]["hallucination_count"]
-    )
+    assert summary["dataset_summary"]["non_hallucination_count"] > summary["dataset_summary"]["hallucination_count"]
     assert "before" in summary["public_benchmark"]
     assert "after" in summary["public_benchmark"]
     assert "pr_auc" in summary["public_benchmark"]["before"]
     assert "pr_auc" in summary["public_benchmark"]["after"]
+    assert "precision" in summary["public_benchmark"]["before"]
+    assert "recall" in summary["public_benchmark"]["before"]
+    assert "predicted_positive_rate" in summary["public_benchmark"]["before"]
+    assert "precision" in summary["public_benchmark"]["after"]
+    assert "recall" in summary["public_benchmark"]["after"]
+    assert "predicted_positive_rate" in summary["public_benchmark"]["after"]
     assert "numbers" in summary["public_benchmark"]["bucket_deltas"]
     assert "entity_like_tokens" in summary["public_benchmark"]["bucket_deltas"]
     assert "places" in summary["public_benchmark"]["bucket_deltas"]
@@ -125,3 +128,4 @@ def test_run_non_public_retraining_public_eval_writes_before_after_summary(tmp_p
     assert payload["dataset_summary"]["corruption_taxonomy"]["number_nearby"] > 0
     assert "recall_recovery" in payload
     assert "decision" in payload
+    assert "precision_change" in payload

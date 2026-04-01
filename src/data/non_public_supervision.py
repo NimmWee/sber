@@ -346,13 +346,13 @@ def build_non_public_supervision_dataset(
     entity_heavy_count = 0
     place_rich_count = 0
     approximate_or_range_style_count = 0
-    risky_bucket_negative_coverage = {
+    risky_bucket_non_hallucination_coverage = {
         "numbers": 0,
         "entity_like_tokens": 0,
         "places": 0,
         "long_responses": 0,
     }
-    risky_bucket_positive_coverage = {
+    risky_bucket_hallucination_coverage = {
         "numbers": 0,
         "entity_like_tokens": 0,
         "places": 0,
@@ -377,7 +377,9 @@ def build_non_public_supervision_dataset(
         if bucket_flags["approximate_or_range_style"]:
             approximate_or_range_style_count += 1
         coverage_target = (
-            risky_bucket_negative_coverage if example.label == 0 else risky_bucket_positive_coverage
+            risky_bucket_non_hallucination_coverage
+            if example.label == 0
+            else risky_bucket_hallucination_coverage
         )
         for bucket_name in ("numbers", "entity_like_tokens", "places", "long_responses"):
             if bucket_flags[bucket_name]:
@@ -392,11 +394,42 @@ def build_non_public_supervision_dataset(
     warnings = _dataset_warnings(
         non_hallucination_count=positive_count,
         hallucination_count=negative_count,
-        risky_bucket_negative_coverage=risky_bucket_negative_coverage,
-        risky_bucket_positive_coverage=risky_bucket_positive_coverage,
+        risky_bucket_non_hallucination_coverage=risky_bucket_non_hallucination_coverage,
+        risky_bucket_hallucination_coverage=risky_bucket_hallucination_coverage,
         too_trivial_or_unrealistic_count=len(flagged_examples),
         sample_size=len(train_examples) + len(dev_examples),
     )
+    bucket_label_counts = {
+        bucket_name: {
+            "non_hallucination_count": risky_bucket_non_hallucination_coverage[bucket_name],
+            "hallucination_count": risky_bucket_hallucination_coverage[bucket_name],
+        }
+        for bucket_name in risky_bucket_non_hallucination_coverage
+    }
+    bucket_label_ratios = {
+        bucket_name: {
+            "non_hallucination_ratio": (
+                bucket_label_counts[bucket_name]["non_hallucination_count"]
+                / (
+                    bucket_label_counts[bucket_name]["non_hallucination_count"]
+                    + bucket_label_counts[bucket_name]["hallucination_count"]
+                )
+            ),
+            "hallucination_ratio": (
+                bucket_label_counts[bucket_name]["hallucination_count"]
+                / (
+                    bucket_label_counts[bucket_name]["non_hallucination_count"]
+                    + bucket_label_counts[bucket_name]["hallucination_count"]
+                )
+            ),
+        }
+        for bucket_name in bucket_label_counts
+        if (
+            bucket_label_counts[bucket_name]["non_hallucination_count"]
+            + bucket_label_counts[bucket_name]["hallucination_count"]
+        )
+        > 0
+    }
     leakage_checks = _compute_leakage_checks(
         supervision_examples=train_examples + dev_examples,
         public_eval_examples=public_eval_examples or [],
@@ -405,13 +438,9 @@ def build_non_public_supervision_dataset(
         "sample_size": len(train_examples) + len(dev_examples),
         "train_size": len(train_examples),
         "dev_size": len(dev_examples),
-        "positive_count": positive_count,
-        "negative_count": negative_count,
         "non_hallucination_count": positive_count,
         "hallucination_count": negative_count,
         "label_balance": {
-            "positive_ratio": positive_count / (positive_count + negative_count),
-            "negative_ratio": negative_count / (positive_count + negative_count),
             "non_hallucination_ratio": positive_count / (positive_count + negative_count),
             "hallucination_ratio": negative_count / (positive_count + negative_count),
         },
@@ -420,8 +449,8 @@ def build_non_public_supervision_dataset(
         "entity_heavy_count": entity_heavy_count,
         "place_rich_count": place_rich_count,
         "approximate_or_range_style_count": approximate_or_range_style_count,
-        "risky_bucket_negative_coverage": risky_bucket_negative_coverage,
-        "risky_bucket_positive_coverage": risky_bucket_positive_coverage,
+        "bucket_label_counts": bucket_label_counts,
+        "bucket_label_ratios": bucket_label_ratios,
         "corruption_taxonomy": corruption_taxonomy,
         "too_trivial_or_unrealistic_count": len(flagged_examples),
         "flagged_too_trivial_or_unrealistic_examples": flagged_examples,
@@ -470,9 +499,10 @@ def _build_hallucinated_response_variants(seed: SeedFact) -> tuple[str, ...]:
     variants = [
         seed.negative_response,
         f"A concise answer is: {seed.negative_response}",
+        f"A confident factual answer is: {seed.negative_response}",
     ]
     if seed.is_long_response:
-        variants.append(f"In a confident summary, {seed.negative_response}")
+        variants.append(f"In a concise summary, {seed.negative_response}")
     return _dedupe_ordered(variants)
 
 
@@ -570,8 +600,8 @@ def _dataset_warnings(
     *,
     non_hallucination_count: int,
     hallucination_count: int,
-    risky_bucket_negative_coverage: dict[str, int],
-    risky_bucket_positive_coverage: dict[str, int],
+    risky_bucket_non_hallucination_coverage: dict[str, int],
+    risky_bucket_hallucination_coverage: dict[str, int],
     too_trivial_or_unrealistic_count: int,
     sample_size: int,
 ) -> list[str]:
@@ -579,10 +609,18 @@ def _dataset_warnings(
     hallucination_ratio = hallucination_count / max(sample_size, 1)
     if hallucination_ratio >= 0.48:
         warnings.append("hallucination ratio is high and may inflate false positives")
-    for bucket_name, negative_coverage in risky_bucket_negative_coverage.items():
-        if negative_coverage <= risky_bucket_positive_coverage[bucket_name]:
+    for bucket_name, non_hallucination_coverage in risky_bucket_non_hallucination_coverage.items():
+        if non_hallucination_coverage <= risky_bucket_hallucination_coverage[bucket_name]:
             warnings.append(
-                f"correct coverage for {bucket_name} is not stronger than hallucinated coverage"
+                f"{bucket_name} bucket is overly dominated by hallucinations"
+            )
+        hallucination_ratio = risky_bucket_hallucination_coverage[bucket_name] / max(
+            non_hallucination_coverage + risky_bucket_hallucination_coverage[bucket_name],
+            1,
+        )
+        if hallucination_ratio < 0.2:
+            warnings.append(
+                f"{bucket_name} bucket is underrepresented on hallucination side"
             )
     if too_trivial_or_unrealistic_count / max(sample_size, 1) > 0.05:
         warnings.append("too many examples are flagged as trivial or unrealistic")

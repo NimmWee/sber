@@ -47,8 +47,8 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
         lambda **_: {
             "dataset_summary": {
                 "sample_size": 28,
-                "positive_count": 14,
-                "negative_count": 14,
+                "non_hallucination_count": 18,
+                "hallucination_count": 10,
                 "corruption_taxonomy": {"number_nearby": 3, "entity_swap": 3},
             },
             "public_benchmark": {
@@ -56,11 +56,17 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
                     "pr_auc": 0.5938,
                     "false_positive_count": 35,
                     "false_negative_count": 478,
+                    "precision": 0.50,
+                    "recall": 0.22,
+                    "predicted_positive_rate": 0.30,
                 },
                 "after": {
                     "pr_auc": 0.6117,
                     "false_positive_count": 37,
                     "false_negative_count": 470,
+                    "precision": 0.52,
+                    "recall": 0.24,
+                    "predicted_positive_rate": 0.31,
                 },
                 "bucket_deltas": {
                     "numbers": {"false_positive_delta": 1, "false_negative_delta": -4},
@@ -75,6 +81,7 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
                 "false_positive_increase": 2,
                 "false_positive_increase_too_much": False,
             },
+            "precision_change": 0.02,
             "decision": {
                 "accept_change": True,
                 "rejection_reason": None,
@@ -103,8 +110,12 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
 
     output = capsys.readouterr().out
     assert "dataset_size=28" in output
+    assert "non_hallucination_count=18" in output
+    assert "hallucination_count=10" in output
     assert "before_pr_auc=0.5938" in output
     assert "after_pr_auc=0.6117" in output
+    assert "before_recall=0.2200" in output
+    assert "after_recall=0.2400" in output
     assert "numbers" in output
     assert "false_negatives_decreased=True" in output
     assert "accept_change=True" in output
