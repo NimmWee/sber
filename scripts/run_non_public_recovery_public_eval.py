@@ -67,6 +67,14 @@ def main() -> None:
     print(f"after_false_positives={summary['public_benchmark']['after']['false_positive_count']}")
     print(f"after_false_negatives={summary['public_benchmark']['after']['false_negative_count']}")
     print(f"bucket_deltas={summary['public_benchmark']['bucket_deltas']}")
+    print(
+        "false_negatives_decreased="
+        f"{summary['recall_recovery']['false_negatives_decreased']}"
+    )
+    print(
+        "false_positive_increase_too_much="
+        f"{summary['recall_recovery']['false_positive_increase_too_much']}"
+    )
     print(f"artifact={summary['artifact_path']}")
 
 

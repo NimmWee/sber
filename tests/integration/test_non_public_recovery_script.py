@@ -65,8 +65,15 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
                 "bucket_deltas": {
                     "numbers": {"false_positive_delta": 1, "false_negative_delta": -4},
                     "entity_like_tokens": {"false_positive_delta": 2, "false_negative_delta": -5},
+                    "places": {"false_positive_delta": 0, "false_negative_delta": -2},
                     "long_responses": {"false_positive_delta": -1, "false_negative_delta": -6},
                 },
+            },
+            "recall_recovery": {
+                "false_negatives_decreased": True,
+                "false_negative_delta": -8,
+                "false_positive_increase": 2,
+                "false_positive_increase_too_much": False,
             },
             "artifact_path": str(artifact_dir / "non_public_recovery_summary.json"),
             "trained_model_artifact_path": str(artifact_dir / "retrained_default_detector_head.json"),
@@ -93,4 +100,5 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
     assert "before_pr_auc=0.5938" in output
     assert "after_pr_auc=0.6117" in output
     assert "numbers" in output
+    assert "false_negatives_decreased=True" in output
     assert "artifact=" in output

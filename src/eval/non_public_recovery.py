@@ -81,8 +81,19 @@ def run_non_public_retraining_public_eval(
             "false_negative_delta": after_summary["bucket_summaries"][bucket_name].false_negative_count
             - before_summary["bucket_summaries"][bucket_name].false_negative_count,
         }
-        for bucket_name in ("numbers", "entity_like_tokens", "long_responses")
+        for bucket_name in (
+            "numbers",
+            "entity_like_tokens",
+            "places",
+            "long_responses",
+        )
     }
+    false_positive_increase = (
+        after_summary["false_positive_count"] - before_summary["false_positive_count"]
+    )
+    false_negative_delta = (
+        after_summary["false_negative_count"] - before_summary["false_negative_count"]
+    )
 
     payload = {
         "dataset_summary": supervision_dataset.summary,
@@ -90,6 +101,12 @@ def run_non_public_retraining_public_eval(
             "before": before_summary,
             "after": after_summary,
             "bucket_deltas": bucket_deltas,
+        },
+        "recall_recovery": {
+            "false_negatives_decreased": false_negative_delta < 0,
+            "false_negative_delta": false_negative_delta,
+            "false_positive_increase": false_positive_increase,
+            "false_positive_increase_too_much": false_positive_increase > 25,
         },
         "dev_summary": dev_summary,
         "trained_model_artifact_path": str(trained_model_artifact_path),
@@ -190,6 +207,7 @@ def _json_safe_payload(payload: dict) -> dict:
             "after": _serialize_eval_summary(public_benchmark["after"]),
             "bucket_deltas": public_benchmark["bucket_deltas"],
         },
+        "recall_recovery": payload["recall_recovery"],
         "dev_summary": _serialize_eval_summary(dev_summary),
         "trained_model_artifact_path": payload["trained_model_artifact_path"],
         "cached_signal_runtime_ms": payload["cached_signal_runtime_ms"],

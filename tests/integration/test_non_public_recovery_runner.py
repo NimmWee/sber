@@ -109,9 +109,13 @@ def test_run_non_public_retraining_public_eval_writes_before_after_summary(tmp_p
     assert "pr_auc" in summary["public_benchmark"]["after"]
     assert "numbers" in summary["public_benchmark"]["bucket_deltas"]
     assert "entity_like_tokens" in summary["public_benchmark"]["bucket_deltas"]
+    assert "places" in summary["public_benchmark"]["bucket_deltas"]
     assert "long_responses" in summary["public_benchmark"]["bucket_deltas"]
+    assert summary["recall_recovery"]["false_negatives_decreased"] in {True, False}
+    assert "false_positive_increase_too_much" in summary["recall_recovery"]
     assert Path(summary["artifact_path"]).exists()
     assert Path(summary["trained_model_artifact_path"]).exists()
 
     payload = json.loads(Path(summary["artifact_path"]).read_text(encoding="utf-8"))
     assert payload["dataset_summary"]["corruption_taxonomy"]["number_nearby"] > 0
+    assert "recall_recovery" in payload

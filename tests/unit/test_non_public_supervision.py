@@ -30,12 +30,17 @@ def test_build_non_public_supervision_dataset_returns_balanced_taxonomy_and_leak
 
     assert len(dataset.train_examples) > 0
     assert len(dataset.dev_examples) > 0
+    assert dataset.summary["sample_size"] >= 300
+    assert dataset.summary["train_size"] >= 240
+    assert dataset.summary["dev_size"] >= 60
     assert dataset.summary["positive_count"] == dataset.summary["negative_count"]
-    assert dataset.summary["corruption_taxonomy"]["number_nearby"] > 0
-    assert dataset.summary["corruption_taxonomy"]["entity_swap"] > 0
-    assert dataset.summary["corruption_taxonomy"]["place_swap"] > 0
-    assert dataset.summary["corruption_taxonomy"]["organization_or_title_swap"] > 0
-    assert dataset.summary["corruption_taxonomy"]["date_nearby"] > 0
-    assert dataset.summary["long_response_count"] > 0
+    assert dataset.summary["corruption_taxonomy"]["number_nearby"] >= 20
+    assert dataset.summary["corruption_taxonomy"]["entity_swap"] >= 20
+    assert dataset.summary["corruption_taxonomy"]["place_swap"] >= 20
+    assert dataset.summary["corruption_taxonomy"]["organization_or_title_swap"] >= 20
+    assert dataset.summary["corruption_taxonomy"]["date_nearby"] >= 20
+    assert dataset.summary["long_response_count"] >= 40
+    assert "too_trivial_or_unrealistic_count" in dataset.summary
+    assert "flagged_too_trivial_or_unrealistic_examples" in dataset.summary
     assert dataset.summary["leakage_checks"]["public_exact_example_overlap_count"] == 0
     assert dataset.summary["leakage_checks"]["public_prompt_overlap_count"] >= 0
