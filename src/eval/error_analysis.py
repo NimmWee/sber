@@ -3,10 +3,9 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from eval.default_detector import filter_default_detector_rows
+from eval.default_detector import filter_default_detector_rows, train_default_detector_head
 from eval.metrics import compute_pr_auc
 from eval.runner import RawExampleEvaluationDataset, RawLabeledExample
-from models.head import train_logistic_regression_head
 
 
 SHORT_RESPONSE_TOKEN_THRESHOLD = 8
@@ -43,7 +42,9 @@ class ErrorAnalysisSummary:
     false_negative_count: int
     hardest_examples: list[ErrorExampleSummary]
     bucket_summaries: dict[str, ErrorBucketSummary]
+    focused_bucket_summaries: dict[str, ErrorBucketSummary]
     non_trivial_buckets: list[str]
+    recommended_next_improvement: str
     model_artifact_path: str | None = None
     summary_artifact_path: str | None = None
 
@@ -132,6 +133,17 @@ def analyze_prediction_errors(
         for bucket_name, summary in bucket_summaries.items()
         if summary.false_positive_count + summary.false_negative_count > 0
     ]
+    focused_bucket_names = (
+        "numbers",
+        "entity_like_tokens",
+        "places",
+        "short_responses",
+        "long_responses",
+    )
+    focused_bucket_summaries = {
+        bucket_name: bucket_summaries[bucket_name]
+        for bucket_name in focused_bucket_names
+    }
 
     return ErrorAnalysisSummary(
         pr_auc=float(pr_auc),
@@ -140,7 +152,11 @@ def analyze_prediction_errors(
         false_negative_count=false_negative_count,
         hardest_examples=hardest_examples,
         bucket_summaries=bucket_summaries,
+        focused_bucket_summaries=focused_bucket_summaries,
         non_trivial_buckets=non_trivial_buckets,
+        recommended_next_improvement=_recommend_next_improvement(
+            focused_bucket_summaries
+        ),
     )
 
 
@@ -156,19 +172,19 @@ class DefaultDetectorErrorAnalysisRunner:
 
     def run(self) -> ErrorAnalysisSummary:
         split = self.dataset.load_split()
-        train_features = filter_default_detector_rows(
-            feature_rows=split.train_features,
-        )
         validation_features = filter_default_detector_rows(
             feature_rows=split.validation_features,
         )
 
-        model = train_logistic_regression_head(train_features, split.train_labels)
+        model = train_default_detector_head(
+            feature_rows=split.train_features,
+            labels=split.train_labels,
+        )
         probabilities = model.predict_proba_batch(validation_features)
         pr_auc = compute_pr_auc(split.validation_labels, probabilities)
 
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
-        model_artifact_path = self.artifact_dir / "logistic_head.json"
+        model_artifact_path = self.artifact_dir / "default_detector_head.json"
         summary_artifact_path = self.artifact_dir / "error_analysis_summary.json"
         model.save(model_artifact_path)
 
@@ -184,7 +200,9 @@ class DefaultDetectorErrorAnalysisRunner:
             false_negative_count=summary.false_negative_count,
             hardest_examples=summary.hardest_examples,
             bucket_summaries=summary.bucket_summaries,
+            focused_bucket_summaries=summary.focused_bucket_summaries,
             non_trivial_buckets=summary.non_trivial_buckets,
+            recommended_next_improvement=summary.recommended_next_improvement,
             model_artifact_path=str(model_artifact_path),
             summary_artifact_path=str(summary_artifact_path),
         )
@@ -222,3 +240,35 @@ def _has_location_like_mentions(*, prompt: str, response: str) -> bool:
     if any(cue in prompt_lower for cue in location_prompt_cues):
         return bool(ENTITY_PATTERN.search(response))
     return False
+
+
+def _recommend_next_improvement(
+    focused_bucket_summaries: dict[str, ErrorBucketSummary],
+) -> str:
+    prioritized_buckets = (
+        "entity_like_tokens",
+        "places",
+        "numbers",
+        "short_responses",
+        "long_responses",
+    )
+    dominant_bucket = max(
+        prioritized_buckets,
+        key=lambda bucket_name: (
+            focused_bucket_summaries[bucket_name].false_positive_count
+            + focused_bucket_summaries[bucket_name].false_negative_count
+        ),
+    )
+    if (
+        focused_bucket_summaries[dominant_bucket].false_positive_count
+        + focused_bucket_summaries[dominant_bucket].false_negative_count
+        == 0
+    ):
+        return "No model change yet; expand evaluation before adding new features."
+    if dominant_bucket in {"entity_like_tokens", "places"}:
+        return "Expand non-public entity and place supervision before adding new model features."
+    if dominant_bucket == "numbers":
+        return "Add more non-public numeric contradiction examples before new feature work."
+    if dominant_bucket == "short_responses":
+        return "Improve short-answer coverage in non-public training data before changing the model."
+    return "Expand non-public long-response supervision before adding feature complexity."

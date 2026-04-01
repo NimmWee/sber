@@ -13,10 +13,12 @@ if str(SRC_ROOT) not in sys.path:
 
 from eval.default_detector import build_default_detector_extractor
 from eval.error_analysis import DefaultDetectorErrorAnalysisRunner
+from eval.public_benchmark import load_public_benchmark_examples
 from eval.runner import RawExampleEvaluationDataset
 from inference.token_stats import TransformersTokenStatProvider
 from utils.script_helpers import (
     build_ablation_examples,
+    resolve_public_benchmark_path,
     resolve_transformers_provider_config,
     write_json_artifact,
 )
@@ -25,6 +27,7 @@ from utils.script_helpers import (
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None)
+    parser.add_argument("--dataset-path", default=None)
     parser.add_argument(
         "--artifact-dir",
         default=str(PROJECT_ROOT / "artifacts" / "error_analysis_real_provider"),
@@ -40,6 +43,13 @@ def main() -> None:
         explicit_config_path=args.config,
     )
     provider = TransformersTokenStatProvider(config=config)
+    if args.dataset_path is not None:
+        dataset_path = resolve_public_benchmark_path(
+            project_root=PROJECT_ROOT,
+            explicit_dataset_path=args.dataset_path,
+        )
+        validation_examples = load_public_benchmark_examples(dataset_path)
+
     runner = DefaultDetectorErrorAnalysisRunner(
         dataset=RawExampleEvaluationDataset(
             train_examples=train_examples,
@@ -62,6 +72,8 @@ def main() -> None:
             "false_positive_count": summary.false_positive_count,
             "false_negative_count": summary.false_negative_count,
             "non_trivial_buckets": summary.non_trivial_buckets,
+            "focused_bucket_summaries": summary.focused_bucket_summaries,
+            "recommended_next_improvement": summary.recommended_next_improvement,
             "hardest_examples": [
                 {
                     "prompt": example.prompt,
@@ -81,9 +93,12 @@ def main() -> None:
 
     print(f"model={config.model_source}")
     print(f"pr_auc={summary.pr_auc:.4f}")
+    print(f"sample_size={summary.sample_size}")
     print(f"false_positives={summary.false_positive_count}")
     print(f"false_negatives={summary.false_negative_count}")
     print(f"non_trivial_buckets={','.join(summary.non_trivial_buckets)}")
+    print(f"focused_buckets={summary.focused_bucket_summaries}")
+    print(f"recommended_next_improvement={summary.recommended_next_improvement}")
     print(f"artifact={artifact_path}")
 
 
