@@ -10,9 +10,16 @@ from eval.default_detector import DEFAULT_TOKEN_FEATURE_GROUPS
 from eval.error_analysis import analyze_prediction_errors
 from eval.metrics import compute_pr_auc
 from eval.public_benchmark import load_public_benchmark_examples
+from eval.specialist_ensemble import (
+    build_all_specialist_blend,
+    build_fusion_feature_row,
+    build_single_specialist_blend,
+    extract_specialist_features,
+    select_specialist_feature_subset,
+)
 from eval.runner import RawLabeledExample
 from features.extractor import StructuralFeatureExtractor
-from models.head import train_lightgbm_head, train_logistic_regression_head
+from models.head import TrainedLightGBMHead, train_lightgbm_head, train_logistic_regression_head
 from utils.script_helpers import write_json_artifact
 
 
@@ -175,6 +182,13 @@ def run_public_benchmark_ablation(
         head_kind="lightgbm",
     )
     variants[improved_lightgbm_variant["name"]] = improved_lightgbm_variant
+    specialist_variants = _evaluate_specialist_ensemble_variants(
+        train_examples=cached_train_examples,
+        validation_examples=cached_validation_examples,
+        artifact_dir=output_dir,
+        latency_repeat_count=latency_repeat_count,
+    )
+    variants.update(specialist_variants)
 
     best_variant_name = max(
         variants,
@@ -275,6 +289,8 @@ def _evaluate_variant(
         probabilities=probabilities,
         pr_auc=pr_auc,
     )
+    metrics = _binary_metrics(validation_labels, probabilities)
+    score_distribution = _score_distribution(validation_labels, probabilities)
 
     model_artifact_path = artifact_dir / "logistic_head.json"
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -294,6 +310,9 @@ def _evaluate_variant(
             "sample_size": len(validation_examples),
             "latency_total_mean_ms": latency_total_mean_ms,
             "head_kind": head_kind,
+            "precision": metrics["precision"],
+            "recall": metrics["recall"],
+            "predicted_positive_rate": metrics["predicted_positive_rate"],
             "false_positive_count": error_summary.false_positive_count,
             "false_negative_count": error_summary.false_negative_count,
             "non_trivial_buckets": error_summary.non_trivial_buckets,
@@ -305,9 +324,13 @@ def _evaluate_variant(
         "sample_size": len(validation_examples),
         "latency_total_mean_ms": latency_total_mean_ms,
         "head_kind": head_kind,
+        "precision": metrics["precision"],
+        "recall": metrics["recall"],
+        "predicted_positive_rate": metrics["predicted_positive_rate"],
         "false_positive_count": error_summary.false_positive_count,
         "false_negative_count": error_summary.false_negative_count,
         "non_trivial_buckets": error_summary.non_trivial_buckets,
+        "score_distribution": score_distribution,
         "hardest_examples": [asdict(example) for example in error_summary.hardest_examples],
         "summary_artifact_path": str(summary_artifact_path),
         "model_artifact_path": str(model_artifact_path),
@@ -442,3 +465,412 @@ def _structural_feature_names(feature_rows: list[dict[str, float]]) -> set[str]:
         for feature_name in row
         if not feature_name.startswith("token_") and not feature_name.startswith("internal_")
     }
+
+
+def _evaluate_specialist_ensemble_variants(
+    *,
+    train_examples: list[RawLabeledExample],
+    validation_examples: list[RawLabeledExample],
+    artifact_dir: Path,
+    latency_repeat_count: int,
+) -> dict[str, dict]:
+    default_extractor = StructuralFeatureExtractor(
+        enable_token_uncertainty=True,
+        enable_internal_features=True,
+        enable_compact_internal_enhancements=True,
+        token_feature_groups=DEFAULT_TOKEN_FEATURE_GROUPS,
+    )
+    train_base_rows, train_labels, train_specialist_rows = _prepare_default_and_specialist_rows(
+        train_examples,
+        default_extractor,
+    )
+    validation_base_rows, validation_labels, validation_specialist_rows = _prepare_default_and_specialist_rows(
+        validation_examples,
+        default_extractor,
+    )
+
+    baseline_head = train_lightgbm_head(train_base_rows, train_labels)
+    baseline_train_scores = baseline_head.predict_proba_batch(train_base_rows)
+    baseline_validation_scores = baseline_head.predict_proba_batch(validation_base_rows)
+
+    numeric_head = train_lightgbm_head(
+        select_specialist_feature_subset(
+            specialist_rows=train_specialist_rows,
+            prefix="specialist_numeric_",
+        ),
+        train_labels,
+    )
+    entity_head = train_lightgbm_head(
+        select_specialist_feature_subset(
+            specialist_rows=train_specialist_rows,
+            prefix="specialist_entity_",
+        ),
+        train_labels,
+    )
+    long_head = train_lightgbm_head(
+        select_specialist_feature_subset(
+            specialist_rows=train_specialist_rows,
+            prefix="specialist_long_",
+        ),
+        train_labels,
+    )
+
+    numeric_train_scores = numeric_head.predict_proba_batch(
+        select_specialist_feature_subset(
+            specialist_rows=train_specialist_rows,
+            prefix="specialist_numeric_",
+        )
+    )
+    entity_train_scores = entity_head.predict_proba_batch(
+        select_specialist_feature_subset(
+            specialist_rows=train_specialist_rows,
+            prefix="specialist_entity_",
+        )
+    )
+    long_train_scores = long_head.predict_proba_batch(
+        select_specialist_feature_subset(
+            specialist_rows=train_specialist_rows,
+            prefix="specialist_long_",
+        )
+    )
+
+    numeric_validation_scores = numeric_head.predict_proba_batch(
+        select_specialist_feature_subset(
+            specialist_rows=validation_specialist_rows,
+            prefix="specialist_numeric_",
+        )
+    )
+    entity_validation_scores = entity_head.predict_proba_batch(
+        select_specialist_feature_subset(
+            specialist_rows=validation_specialist_rows,
+            prefix="specialist_entity_",
+        )
+    )
+    long_validation_scores = long_head.predict_proba_batch(
+        select_specialist_feature_subset(
+            specialist_rows=validation_specialist_rows,
+            prefix="specialist_long_",
+        )
+    )
+
+    variants = {
+        "baseline_plus_numeric_specialist": _evaluate_probability_variant(
+            name="baseline_plus_numeric_specialist",
+            probabilities=build_single_specialist_blend(
+                baseline_scores=baseline_validation_scores,
+                specialist_scores=numeric_validation_scores,
+            ),
+            validation_examples=validation_examples,
+            latency_total_mean_ms=_measure_score_only_latency(
+                [baseline_validation_scores[0], numeric_validation_scores[0]],
+                repeat_count=latency_repeat_count,
+            ),
+            artifact_dir=artifact_dir / "baseline_plus_numeric_specialist",
+            score_components_mean={
+                "baseline_score": _mean(baseline_validation_scores),
+                "numeric_specialist_score": _mean(numeric_validation_scores),
+            },
+        ),
+        "baseline_plus_entity_specialist": _evaluate_probability_variant(
+            name="baseline_plus_entity_specialist",
+            probabilities=build_single_specialist_blend(
+                baseline_scores=baseline_validation_scores,
+                specialist_scores=entity_validation_scores,
+            ),
+            validation_examples=validation_examples,
+            latency_total_mean_ms=_measure_score_only_latency(
+                [baseline_validation_scores[0], entity_validation_scores[0]],
+                repeat_count=latency_repeat_count,
+            ),
+            artifact_dir=artifact_dir / "baseline_plus_entity_specialist",
+            score_components_mean={
+                "baseline_score": _mean(baseline_validation_scores),
+                "entity_specialist_score": _mean(entity_validation_scores),
+            },
+        ),
+        "baseline_plus_long_specialist": _evaluate_probability_variant(
+            name="baseline_plus_long_specialist",
+            probabilities=build_single_specialist_blend(
+                baseline_scores=baseline_validation_scores,
+                specialist_scores=long_validation_scores,
+            ),
+            validation_examples=validation_examples,
+            latency_total_mean_ms=_measure_score_only_latency(
+                [baseline_validation_scores[0], long_validation_scores[0]],
+                repeat_count=latency_repeat_count,
+            ),
+            artifact_dir=artifact_dir / "baseline_plus_long_specialist",
+            score_components_mean={
+                "baseline_score": _mean(baseline_validation_scores),
+                "long_specialist_score": _mean(long_validation_scores),
+            },
+        ),
+        "baseline_plus_all_specialists": _evaluate_probability_variant(
+            name="baseline_plus_all_specialists",
+            probabilities=build_all_specialist_blend(
+                baseline_scores=baseline_validation_scores,
+                numeric_scores=numeric_validation_scores,
+                entity_scores=entity_validation_scores,
+                long_scores=long_validation_scores,
+            ),
+            validation_examples=validation_examples,
+            latency_total_mean_ms=_measure_score_only_latency(
+                [
+                    baseline_validation_scores[0],
+                    numeric_validation_scores[0],
+                    entity_validation_scores[0],
+                    long_validation_scores[0],
+                ],
+                repeat_count=latency_repeat_count,
+            ),
+            artifact_dir=artifact_dir / "baseline_plus_all_specialists",
+            score_components_mean={
+                "baseline_score": _mean(baseline_validation_scores),
+                "numeric_specialist_score": _mean(numeric_validation_scores),
+                "entity_specialist_score": _mean(entity_validation_scores),
+                "long_specialist_score": _mean(long_validation_scores),
+            },
+        ),
+    }
+
+    fusion_train_rows = [
+        build_fusion_feature_row(
+            baseline_score=baseline_score,
+            numeric_score=numeric_score,
+            entity_score=entity_score,
+            long_score=long_score,
+            specialist_features=specialist_row,
+        )
+        for baseline_score, numeric_score, entity_score, long_score, specialist_row in zip(
+            baseline_train_scores,
+            numeric_train_scores,
+            entity_train_scores,
+            long_train_scores,
+            train_specialist_rows,
+        )
+    ]
+    fusion_validation_rows = [
+        build_fusion_feature_row(
+            baseline_score=baseline_score,
+            numeric_score=numeric_score,
+            entity_score=entity_score,
+            long_score=long_score,
+            specialist_features=specialist_row,
+        )
+        for baseline_score, numeric_score, entity_score, long_score, specialist_row in zip(
+            baseline_validation_scores,
+            numeric_validation_scores,
+            entity_validation_scores,
+            long_validation_scores,
+            validation_specialist_rows,
+        )
+    ]
+    fusion_head = train_lightgbm_head(fusion_train_rows, train_labels)
+    fused_probabilities = fusion_head.predict_proba_batch(fusion_validation_rows)
+    variants["fused_specialist_ensemble"] = _evaluate_probability_variant(
+        name="fused_specialist_ensemble",
+        probabilities=fused_probabilities,
+        validation_examples=validation_examples,
+        latency_total_mean_ms=_measure_variant_latency_from_rows(
+            example_row=fusion_validation_rows[0],
+            head=fusion_head,
+            repeat_count=latency_repeat_count,
+        ),
+        artifact_dir=artifact_dir / "fused_specialist_ensemble",
+        score_components_mean={
+            "baseline_score": _mean(baseline_validation_scores),
+            "numeric_specialist_score": _mean(numeric_validation_scores),
+            "entity_specialist_score": _mean(entity_validation_scores),
+            "long_specialist_score": _mean(long_validation_scores),
+        },
+        model=head_to_artifact(fusion_head),
+    )
+    return variants
+
+
+def _prepare_default_and_specialist_rows(
+    examples: list[RawLabeledExample],
+    extractor: StructuralFeatureExtractor,
+) -> tuple[list[dict[str, float]], list[int], list[dict[str, float]]]:
+    base_rows: list[dict[str, float]] = []
+    specialist_rows: list[dict[str, float]] = []
+    labels: list[int] = []
+    for example in examples:
+        base_rows.append(
+            dict(
+                extractor.extract(
+                    prompt=example.prompt,
+                    response=example.response,
+                    token_stats=example.token_stats,
+                    internal_signal=example.internal_signal,
+                )
+            )
+        )
+        specialist_rows.append(
+            extract_specialist_features(
+                prompt=example.prompt,
+                response=example.response,
+                token_stats=example.token_stats,
+                internal_signal=example.internal_signal,
+            )
+        )
+        labels.append(example.label)
+    return base_rows, labels, specialist_rows
+
+
+def _evaluate_probability_variant(
+    *,
+    name: str,
+    probabilities: list[float],
+    validation_examples: list[RawLabeledExample],
+    latency_total_mean_ms: float,
+    artifact_dir: Path,
+    score_components_mean: dict[str, float] | None = None,
+    model=None,
+) -> dict:
+    labels = [example.label for example in validation_examples]
+    pr_auc = compute_pr_auc(labels, probabilities)
+    error_summary = analyze_prediction_errors(
+        validation_examples=validation_examples,
+        probabilities=probabilities,
+        pr_auc=pr_auc,
+    )
+    metrics = _binary_metrics(labels, probabilities)
+    score_distribution = _score_distribution(labels, probabilities)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    summary_artifact_path = write_json_artifact(
+        artifact_dir=artifact_dir,
+        filename="eval_summary.json",
+        payload={
+            "name": name,
+            "pr_auc": pr_auc,
+            "precision": metrics["precision"],
+            "recall": metrics["recall"],
+            "predicted_positive_rate": metrics["predicted_positive_rate"],
+            "false_positive_count": error_summary.false_positive_count,
+            "false_negative_count": error_summary.false_negative_count,
+            "latency_total_mean_ms": latency_total_mean_ms,
+            "score_distribution": score_distribution,
+            "non_trivial_buckets": error_summary.non_trivial_buckets,
+            "score_components_mean": score_components_mean or {},
+        },
+    )
+    if model is not None:
+        model_artifact_path = artifact_dir / "logistic_head.json"
+        model.save(model_artifact_path)
+        model_artifact = str(model_artifact_path)
+    else:
+        model_artifact = None
+    return {
+        "name": name,
+        "pr_auc": pr_auc,
+        "sample_size": len(validation_examples),
+        "latency_total_mean_ms": latency_total_mean_ms,
+        "precision": metrics["precision"],
+        "recall": metrics["recall"],
+        "predicted_positive_rate": metrics["predicted_positive_rate"],
+        "false_positive_count": error_summary.false_positive_count,
+        "false_negative_count": error_summary.false_negative_count,
+        "non_trivial_buckets": error_summary.non_trivial_buckets,
+        "score_distribution": score_distribution,
+        "hardest_examples": [asdict(example) for example in error_summary.hardest_examples],
+        "summary_artifact_path": str(summary_artifact_path),
+        "model_artifact_path": model_artifact,
+        "score_components_mean": score_components_mean or {},
+    }
+
+
+def _measure_score_only_latency(scores: list[float], *, repeat_count: int) -> float:
+    samples_ms: list[float] = []
+    for _ in range(repeat_count):
+        start = time.perf_counter()
+        _ = sum(scores) / len(scores)
+        samples_ms.append((time.perf_counter() - start) * 1000.0)
+    return sum(samples_ms) / len(samples_ms) if samples_ms else 0.0
+
+
+def _measure_variant_latency_from_rows(*, example_row: dict[str, float], head, repeat_count: int) -> float:
+    samples_ms: list[float] = []
+    for _ in range(repeat_count):
+        start = time.perf_counter()
+        head.predict_proba(example_row)
+        samples_ms.append((time.perf_counter() - start) * 1000.0)
+    return sum(samples_ms) / len(samples_ms) if samples_ms else 0.0
+
+
+def _binary_metrics(labels: list[int], probabilities: list[float], threshold: float = 0.5) -> dict[str, float]:
+    true_positives = 0
+    false_positives = 0
+    false_negatives = 0
+    predicted_positive_count = 0
+    for label, probability in zip(labels, probabilities):
+        predicted_label = 1 if probability >= threshold else 0
+        if predicted_label == 1:
+            predicted_positive_count += 1
+        if predicted_label == 1 and label == 1:
+            true_positives += 1
+        elif predicted_label == 1 and label == 0:
+            false_positives += 1
+        elif predicted_label == 0 and label == 1:
+            false_negatives += 1
+    return {
+        "precision": (
+            true_positives / (true_positives + false_positives)
+            if (true_positives + false_positives)
+            else 0.0
+        ),
+        "recall": (
+            true_positives / (true_positives + false_negatives)
+            if (true_positives + false_negatives)
+            else 0.0
+        ),
+        "predicted_positive_rate": (
+            predicted_positive_count / len(labels) if labels else 0.0
+        ),
+    }
+
+
+def _score_distribution(labels: list[int], probabilities: list[float]) -> dict[str, dict[str, float]]:
+    hallucination_scores = [
+        probability for label, probability in zip(labels, probabilities) if label == 1
+    ]
+    non_hallucination_scores = [
+        probability for label, probability in zip(labels, probabilities) if label == 0
+    ]
+    return {
+        "overall": _distribution_stats(probabilities),
+        "hallucination": _distribution_stats(hallucination_scores),
+        "non_hallucination": _distribution_stats(non_hallucination_scores),
+    }
+
+
+def _distribution_stats(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {"mean": 0.0, "q10": 0.0, "q50": 0.0, "q90": 0.0}
+    ordered = sorted(float(value) for value in values)
+    return {
+        "mean": sum(ordered) / len(ordered),
+        "q10": _quantile(ordered, 0.10),
+        "q50": _quantile(ordered, 0.50),
+        "q90": _quantile(ordered, 0.90),
+    }
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _quantile(sorted_values: list[float], fraction: float) -> float:
+    if not sorted_values:
+        return 0.0
+    position = fraction * (len(sorted_values) - 1)
+    lower_index = int(position)
+    upper_index = min(lower_index + 1, len(sorted_values) - 1)
+    weight = position - lower_index
+    lower = sorted_values[lower_index]
+    upper = sorted_values[upper_index]
+    return lower + (upper - lower) * weight
+
+
+def head_to_artifact(head: TrainedLightGBMHead) -> TrainedLightGBMHead:
+    return head

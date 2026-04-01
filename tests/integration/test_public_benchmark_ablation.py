@@ -82,6 +82,15 @@ def test_run_public_benchmark_ablation_writes_summary(tmp_path) -> None:
     assert "extended_token_uncertainty" in summary["variants"]
     assert "internal_features" in summary["variants"]
     assert "internal_features_lightgbm" in summary["variants"]
+    assert "baseline_plus_numeric_specialist" in summary["variants"]
+    assert "baseline_plus_entity_specialist" in summary["variants"]
+    assert "baseline_plus_long_specialist" in summary["variants"]
+    assert "baseline_plus_all_specialists" in summary["variants"]
+    assert "fused_specialist_ensemble" in summary["variants"]
+    assert "precision" in summary["variants"]["fused_specialist_ensemble"]
+    assert "recall" in summary["variants"]["fused_specialist_ensemble"]
+    assert "predicted_positive_rate" in summary["variants"]["fused_specialist_ensemble"]
+    assert "score_distribution" in summary["variants"]["fused_specialist_ensemble"]
     assert "best_variant" in summary
     assert Path(summary["artifact_path"]).exists()
 

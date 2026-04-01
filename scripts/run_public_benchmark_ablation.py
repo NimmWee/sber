@@ -66,6 +66,9 @@ def main() -> None:
         print(
             f"{variant_name} "
             f"pr_auc={variant['pr_auc']:.4f} "
+            f"precision={variant.get('precision', 0.0):.4f} "
+            f"recall={variant.get('recall', 0.0):.4f} "
+            f"predicted_positive_rate={variant.get('predicted_positive_rate', 0.0):.4f} "
             f"latency_mean_ms={variant['latency_total_mean_ms']:.4f} "
             f"false_positives={variant['false_positive_count']} "
             f"false_negatives={variant['false_negative_count']} "
