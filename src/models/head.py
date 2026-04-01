@@ -193,6 +193,7 @@ def train_lightgbm_head(
     feature_rows: list[Mapping[str, float]],
     labels: list[int],
     *,
+    sample_weights: list[float] | None = None,
     num_boost_round: int = 25,
     learning_rate: float = 0.1,
     num_leaves: int = 7,
@@ -202,6 +203,8 @@ def train_lightgbm_head(
         raise ValueError("feature_rows and labels must have the same length")
     if not feature_rows:
         raise ValueError("feature_rows must not be empty")
+    if sample_weights is not None and len(sample_weights) != len(feature_rows):
+        raise ValueError("sample_weights and feature_rows must have the same length")
 
     feature_names = tuple(
         sorted(
@@ -219,7 +222,12 @@ def train_lightgbm_head(
         ],
         dtype=float,
     )
-    dataset = lgb.Dataset(matrix, label=labels, feature_name=list(feature_names))
+    dataset = lgb.Dataset(
+        matrix,
+        label=labels,
+        weight=sample_weights,
+        feature_name=list(feature_names),
+    )
     booster = lgb.train(
         params={
             "objective": "binary",

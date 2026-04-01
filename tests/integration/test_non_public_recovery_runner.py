@@ -110,15 +110,20 @@ def test_run_non_public_retraining_public_eval_writes_before_after_summary(tmp_p
     assert "precision" in summary["public_benchmark"]["before"]
     assert "recall" in summary["public_benchmark"]["before"]
     assert "predicted_positive_rate" in summary["public_benchmark"]["before"]
+    assert "score_distribution" in summary["public_benchmark"]["before"]
     assert "precision" in summary["public_benchmark"]["after"]
     assert "recall" in summary["public_benchmark"]["after"]
     assert "predicted_positive_rate" in summary["public_benchmark"]["after"]
+    assert "score_distribution" in summary["public_benchmark"]["after"]
     assert "numbers" in summary["public_benchmark"]["bucket_deltas"]
     assert "entity_like_tokens" in summary["public_benchmark"]["bucket_deltas"]
     assert "places" in summary["public_benchmark"]["bucket_deltas"]
     assert "long_responses" in summary["public_benchmark"]["bucket_deltas"]
     assert summary["recall_recovery"]["false_negatives_decreased"] in {True, False}
     assert "false_positive_increase_too_much" in summary["recall_recovery"]
+    assert "predicted_positive_rate_drop_too_far" in summary["guardrails"]
+    assert "recall_collapsed" in summary["guardrails"]
+    assert "long_response_positive_rate_collapsed" in summary["guardrails"]
     assert "accept_change" in summary["decision"]
     assert "rejection_reason" in summary["decision"]
     assert Path(summary["artifact_path"]).exists()
@@ -129,3 +134,4 @@ def test_run_non_public_retraining_public_eval_writes_before_after_summary(tmp_p
     assert "recall_recovery" in payload
     assert "decision" in payload
     assert "precision_change" in payload
+    assert "guardrails" in payload

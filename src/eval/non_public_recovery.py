@@ -14,12 +14,39 @@ from models.head import TrainedLightGBMHead
 from utils.script_helpers import write_json_artifact
 
 
+DEFAULT_RECOVERY_BLEND_WEIGHT = 0.35
+
+
+class _BlendedLightGBMHead:
+    def __init__(
+        self,
+        *,
+        baseline_head: TrainedLightGBMHead,
+        recovery_head: TrainedLightGBMHead,
+        recovery_blend_weight: float,
+    ) -> None:
+        self.baseline_head = baseline_head
+        self.recovery_head = recovery_head
+        self.recovery_blend_weight = recovery_blend_weight
+
+    def predict_proba(self, features) -> float:
+        baseline_probability = self.baseline_head.predict_proba(features)
+        recovery_probability = self.recovery_head.predict_proba(features)
+        return ((1.0 - self.recovery_blend_weight) * baseline_probability) + (
+            self.recovery_blend_weight * recovery_probability
+        )
+
+    def predict_proba_batch(self, feature_rows):
+        return [self.predict_proba(feature_row) for feature_row in feature_rows]
+
+
 def run_non_public_retraining_public_eval(
     *,
     public_dataset_path: str | Path,
     baseline_model_artifact_path: str | Path,
     token_stat_provider,
     artifact_dir: str | Path,
+    recovery_blend_weight: float = DEFAULT_RECOVERY_BLEND_WEIGHT,
 ) -> dict:
     output_dir = Path(artifact_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -53,6 +80,7 @@ def run_non_public_retraining_public_eval(
     trained_head = train_default_detector_head(
         feature_rows=train_feature_rows,
         labels=train_labels,
+        sample_weights=supervision_dataset.train_sample_weights,
     )
     trained_model_artifact_path = output_dir / "retrained_default_detector_head.json"
     trained_head.save(trained_model_artifact_path)
@@ -66,12 +94,20 @@ def run_non_public_retraining_public_eval(
     after_summary = _evaluate_head_on_public_examples(
         examples=cached_public_examples,
         extractor=extractor,
-        head=trained_head,
+        head=_BlendedLightGBMHead(
+            baseline_head=baseline_head,
+            recovery_head=trained_head,
+            recovery_blend_weight=recovery_blend_weight,
+        ),
     )
     dev_summary = _evaluate_head_on_public_examples(
         examples=cached_dev_examples,
         extractor=extractor,
-        head=trained_head,
+        head=_BlendedLightGBMHead(
+            baseline_head=baseline_head,
+            recovery_head=trained_head,
+            recovery_blend_weight=recovery_blend_weight,
+        ),
     )
 
     bucket_deltas = {
@@ -94,9 +130,14 @@ def run_non_public_retraining_public_eval(
     false_negative_delta = (
         after_summary["false_negative_count"] - before_summary["false_negative_count"]
     )
+    guardrails = _build_guardrails(
+        before_summary=before_summary,
+        after_summary=after_summary,
+    )
     decision = _build_change_decision(
         before_summary=before_summary,
         after_summary=after_summary,
+        guardrails=guardrails,
     )
 
     payload = {
@@ -113,10 +154,15 @@ def run_non_public_retraining_public_eval(
             "false_positive_increase_too_much": decision["false_positive_increase_too_much"],
         },
         "precision_change": after_summary["precision"] - before_summary["precision"],
+        "guardrails": guardrails,
         "decision": decision,
         "dev_summary": dev_summary,
         "trained_model_artifact_path": str(trained_model_artifact_path),
         "cached_signal_runtime_ms": cached_signal_runtime_ms,
+        "training_config": {
+            "recovery_blend_weight": recovery_blend_weight,
+            "train_sample_weight_sum": sum(supervision_dataset.train_sample_weights),
+        },
     }
     artifact_path = write_json_artifact(
         artifact_dir=output_dir,
@@ -196,6 +242,7 @@ def _evaluate_head_on_public_examples(
         examples=examples,
         probabilities=probabilities,
     )
+    score_distribution = _score_distribution(labels=labels, probabilities=probabilities)
     return {
         "pr_auc": pr_auc,
         "sample_size": len(examples),
@@ -205,6 +252,7 @@ def _evaluate_head_on_public_examples(
         "recall": metrics["recall"],
         "predicted_positive_rate": metrics["predicted_positive_rate"],
         "bucket_predicted_positive_rates": bucket_predicted_positive_rates,
+        "score_distribution": score_distribution,
         "non_trivial_buckets": error_summary.non_trivial_buckets,
         "bucket_summaries": error_summary.bucket_summaries,
         "hardest_examples": error_summary.hardest_examples,
@@ -224,10 +272,12 @@ def _json_safe_payload(payload: dict) -> dict:
         },
         "recall_recovery": payload["recall_recovery"],
         "precision_change": payload["precision_change"],
+        "guardrails": payload["guardrails"],
         "decision": payload["decision"],
         "dev_summary": _serialize_eval_summary(dev_summary),
         "trained_model_artifact_path": payload["trained_model_artifact_path"],
         "cached_signal_runtime_ms": payload["cached_signal_runtime_ms"],
+        "training_config": payload["training_config"],
     }
 
 
@@ -241,6 +291,7 @@ def _serialize_eval_summary(summary: dict) -> dict:
         "recall": summary["recall"],
         "predicted_positive_rate": summary["predicted_positive_rate"],
         "bucket_predicted_positive_rates": summary["bucket_predicted_positive_rates"],
+        "score_distribution": summary["score_distribution"],
         "non_trivial_buckets": summary["non_trivial_buckets"],
         "bucket_summaries": {
             name: asdict(bucket_summary)
@@ -257,6 +308,7 @@ def _build_change_decision(
     *,
     before_summary: dict,
     after_summary: dict,
+    guardrails: dict[str, bool],
 ) -> dict:
     false_positive_limit = before_summary["false_positive_count"] + max(
         10,
@@ -277,16 +329,53 @@ def _build_change_decision(
         rejection_reasons.append("false negatives did not decrease")
     if not false_positives_controlled:
         rejection_reasons.append("false positives increased beyond the control limit")
+    if guardrails["predicted_positive_rate_drop_too_far"]:
+        rejection_reasons.append("predicted positive rate dropped too far")
+    if guardrails["recall_collapsed"]:
+        rejection_reasons.append("recall collapsed")
+    if guardrails["long_response_positive_rate_collapsed"]:
+        rejection_reasons.append("long-response positive prediction rate collapsed")
+    if guardrails["score_distribution_compressed"]:
+        rejection_reasons.append("score distribution compressed too strongly")
 
     return {
         "accept_change": (
-            pr_auc_improved and false_negatives_decreased and false_positives_controlled
+            pr_auc_improved
+            and false_negatives_decreased
+            and false_positives_controlled
+            and not any(guardrails.values())
         ),
         "rejection_reason": (
             "; ".join(rejection_reasons) if rejection_reasons else None
         ),
         "false_positive_limit": false_positive_limit,
         "false_positive_increase_too_much": not false_positives_controlled,
+    }
+
+
+def _build_guardrails(
+    *,
+    before_summary: dict,
+    after_summary: dict,
+) -> dict:
+    long_before = before_summary["bucket_predicted_positive_rates"]["long_responses"]
+    long_after = after_summary["bucket_predicted_positive_rates"]["long_responses"]
+    before_spread = (
+        before_summary["score_distribution"]["overall"]["q90"]
+        - before_summary["score_distribution"]["overall"]["q10"]
+    )
+    after_spread = (
+        after_summary["score_distribution"]["overall"]["q90"]
+        - after_summary["score_distribution"]["overall"]["q10"]
+    )
+    return {
+        "predicted_positive_rate_drop_too_far": (
+            after_summary["predicted_positive_rate"]
+            < before_summary["predicted_positive_rate"] * 0.7
+        ),
+        "recall_collapsed": after_summary["recall"] < before_summary["recall"] * 0.7,
+        "long_response_positive_rate_collapsed": long_after < long_before * 0.7,
+        "score_distribution_compressed": after_spread < before_spread * 0.7,
     }
 
 
@@ -329,6 +418,49 @@ def _binary_metrics(
             predicted_positive_count / len(labels) if labels else 0.0
         ),
     }
+
+
+def _score_distribution(
+    *,
+    labels: list[int],
+    probabilities: list[float],
+) -> dict[str, dict[str, float]]:
+    overall = _distribution_stats(probabilities)
+    hallucination_scores = [
+        probability for label, probability in zip(labels, probabilities) if label == 1
+    ]
+    non_hallucination_scores = [
+        probability for label, probability in zip(labels, probabilities) if label == 0
+    ]
+    return {
+        "overall": overall,
+        "hallucination": _distribution_stats(hallucination_scores),
+        "non_hallucination": _distribution_stats(non_hallucination_scores),
+    }
+
+
+def _distribution_stats(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {"mean": 0.0, "q10": 0.0, "q50": 0.0, "q90": 0.0}
+    ordered = sorted(float(value) for value in values)
+    return {
+        "mean": sum(ordered) / len(ordered),
+        "q10": _quantile(ordered, 0.10),
+        "q50": _quantile(ordered, 0.50),
+        "q90": _quantile(ordered, 0.90),
+    }
+
+
+def _quantile(sorted_values: list[float], fraction: float) -> float:
+    if not sorted_values:
+        return 0.0
+    position = fraction * (len(sorted_values) - 1)
+    lower_index = int(position)
+    upper_index = min(lower_index + 1, len(sorted_values) - 1)
+    weight = position - lower_index
+    lower = sorted_values[lower_index]
+    upper = sorted_values[upper_index]
+    return lower + (upper - lower) * weight
 
 
 def _bucket_predicted_positive_rates(

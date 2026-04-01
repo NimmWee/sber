@@ -11,6 +11,8 @@ from eval.runner import RawLabeledExample
 class NonPublicSupervisionDataset:
     train_examples: list[RawLabeledExample]
     dev_examples: list[RawLabeledExample]
+    train_sample_weights: list[float]
+    dev_sample_weights: list[float]
     summary: dict
 
 
@@ -289,7 +291,7 @@ def build_non_public_supervision_dataset(
     *,
     public_eval_examples: list[RawLabeledExample] | None = None,
 ) -> NonPublicSupervisionDataset:
-    examples: list[tuple[RawLabeledExample, str, bool]] = []
+    examples: list[tuple[RawLabeledExample, str, bool, float]] = []
     flagged_examples: list[dict[str, str]] = []
 
     for seed in SEED_FACTS:
@@ -315,6 +317,7 @@ def build_non_public_supervision_dataset(
                         ),
                         "clean_positive",
                         seed.is_long_response,
+                        _non_hallucination_weight(response_variant, seed=seed),
                     )
                 )
             for response_variant in hallucinated_response_variants:
@@ -327,11 +330,14 @@ def build_non_public_supervision_dataset(
                         ),
                         seed.corruption_type,
                         seed.is_long_response,
+                        _hallucination_weight(response_variant, seed=seed),
                     )
                 )
 
     train_examples: list[RawLabeledExample] = []
     dev_examples: list[RawLabeledExample] = []
+    train_sample_weights: list[float] = []
+    dev_sample_weights: list[float] = []
     corruption_taxonomy: dict[str, int] = {
         "number_nearby": 0,
         "date_nearby": 0,
@@ -346,6 +352,8 @@ def build_non_public_supervision_dataset(
     entity_heavy_count = 0
     place_rich_count = 0
     approximate_or_range_style_count = 0
+    weighted_non_hallucination_count = 0.0
+    weighted_hallucination_count = 0.0
     risky_bucket_non_hallucination_coverage = {
         "numbers": 0,
         "entity_like_tokens": 0,
@@ -359,12 +367,14 @@ def build_non_public_supervision_dataset(
         "long_responses": 0,
     }
 
-    for index, (example, corruption_type, is_long_response) in enumerate(examples):
+    for index, (example, corruption_type, is_long_response, sample_weight) in enumerate(examples):
         if example.label == 0:
             positive_count += 1
+            weighted_non_hallucination_count += sample_weight
         else:
             negative_count += 1
             corruption_taxonomy[corruption_type] += 1
+            weighted_hallucination_count += sample_weight
         if is_long_response:
             long_response_count += 1
         bucket_flags = _bucket_flags(example.response)
@@ -387,8 +397,10 @@ def build_non_public_supervision_dataset(
 
         if index % 5 == 0:
             dev_examples.append(example)
+            dev_sample_weights.append(sample_weight)
         else:
             train_examples.append(example)
+            train_sample_weights.append(sample_weight)
 
     duplicate_and_near_duplicate = _duplicate_diagnostics(train_examples + dev_examples)
     warnings = _dataset_warnings(
@@ -444,6 +456,16 @@ def build_non_public_supervision_dataset(
             "non_hallucination_ratio": positive_count / (positive_count + negative_count),
             "hallucination_ratio": negative_count / (positive_count + negative_count),
         },
+        "effective_label_balance": {
+            "non_hallucination_ratio": (
+                weighted_non_hallucination_count
+                / (weighted_non_hallucination_count + weighted_hallucination_count)
+            ),
+            "hallucination_ratio": (
+                weighted_hallucination_count
+                / (weighted_non_hallucination_count + weighted_hallucination_count)
+            ),
+        },
         "long_response_count": long_response_count,
         "number_heavy_count": number_heavy_count,
         "entity_heavy_count": entity_heavy_count,
@@ -462,6 +484,8 @@ def build_non_public_supervision_dataset(
     return NonPublicSupervisionDataset(
         train_examples=train_examples,
         dev_examples=dev_examples,
+        train_sample_weights=train_sample_weights,
+        dev_sample_weights=dev_sample_weights,
         summary=summary,
     )
 
@@ -504,6 +528,26 @@ def _build_hallucinated_response_variants(seed: SeedFact) -> tuple[str, ...]:
     if seed.is_long_response:
         variants.append(f"In a concise summary, {seed.negative_response}")
     return _dedupe_ordered(variants)
+
+
+def _non_hallucination_weight(response: str, *, seed: SeedFact) -> float:
+    if response == seed.positive_response:
+        return 1.0
+    if "approximately" in response.lower() or "around" in response.lower():
+        return 0.8
+    if seed.is_long_response:
+        return 0.7
+    return 0.75
+
+
+def _hallucination_weight(response: str, *, seed: SeedFact) -> float:
+    if response == seed.negative_response:
+        return 1.0
+    if "confident factual answer" in response.lower():
+        return 0.85
+    if seed.is_long_response:
+        return 0.85
+    return 0.9
 
 
 def _is_too_trivial_or_unrealistic(seed: SeedFact) -> bool:

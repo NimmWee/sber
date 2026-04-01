@@ -49,6 +49,7 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
                 "sample_size": 28,
                 "non_hallucination_count": 18,
                 "hallucination_count": 10,
+                "effective_label_balance": {"hallucination_ratio": 0.42},
                 "corruption_taxonomy": {"number_nearby": 3, "entity_swap": 3},
             },
             "public_benchmark": {
@@ -59,6 +60,11 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
                     "precision": 0.50,
                     "recall": 0.22,
                     "predicted_positive_rate": 0.30,
+                    "score_distribution": {
+                        "overall": {"mean": 0.31, "q10": 0.05, "q50": 0.24, "q90": 0.72},
+                        "hallucination": {"mean": 0.48, "q10": 0.12, "q50": 0.43, "q90": 0.84},
+                        "non_hallucination": {"mean": 0.18, "q10": 0.03, "q50": 0.11, "q90": 0.42},
+                    },
                 },
                 "after": {
                     "pr_auc": 0.6117,
@@ -67,6 +73,11 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
                     "precision": 0.52,
                     "recall": 0.24,
                     "predicted_positive_rate": 0.31,
+                    "score_distribution": {
+                        "overall": {"mean": 0.33, "q10": 0.06, "q50": 0.28, "q90": 0.75},
+                        "hallucination": {"mean": 0.50, "q10": 0.14, "q50": 0.47, "q90": 0.86},
+                        "non_hallucination": {"mean": 0.19, "q10": 0.03, "q50": 0.12, "q90": 0.43},
+                    },
                 },
                 "bucket_deltas": {
                     "numbers": {"false_positive_delta": 1, "false_negative_delta": -4},
@@ -82,6 +93,16 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
                 "false_positive_increase_too_much": False,
             },
             "precision_change": 0.02,
+            "guardrails": {
+                "predicted_positive_rate_drop_too_far": False,
+                "recall_collapsed": False,
+                "long_response_positive_rate_collapsed": False,
+                "score_distribution_compressed": False,
+            },
+            "training_config": {
+                "recovery_blend_weight": 0.35,
+                "train_sample_weight_sum": 21.5,
+            },
             "decision": {
                 "accept_change": True,
                 "rejection_reason": None,
@@ -112,10 +133,15 @@ def test_run_non_public_recovery_script_prints_dataset_and_before_after_metrics(
     assert "dataset_size=28" in output
     assert "non_hallucination_count=18" in output
     assert "hallucination_count=10" in output
+    assert "effective_hallucination_ratio=0.4200" in output
     assert "before_pr_auc=0.5938" in output
     assert "after_pr_auc=0.6117" in output
     assert "before_recall=0.2200" in output
     assert "after_recall=0.2400" in output
+    assert "before_predicted_positive_rate=0.3000" in output
+    assert "after_predicted_positive_rate=0.3100" in output
+    assert "before_score_mean_hallucination=0.4800" in output
+    assert "after_score_mean_hallucination=0.5000" in output
     assert "numbers" in output
     assert "false_negatives_decreased=True" in output
     assert "accept_change=True" in output

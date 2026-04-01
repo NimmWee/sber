@@ -60,6 +60,10 @@ def main() -> None:
     print(f"dataset_size={summary['dataset_summary']['sample_size']}")
     print(f"non_hallucination_count={summary['dataset_summary']['non_hallucination_count']}")
     print(f"hallucination_count={summary['dataset_summary']['hallucination_count']}")
+    print(
+        "effective_hallucination_ratio="
+        f"{summary['dataset_summary']['effective_label_balance']['hallucination_ratio']:.4f}"
+    )
     print(f"before_pr_auc={summary['public_benchmark']['before']['pr_auc']:.4f}")
     print(f"after_pr_auc={summary['public_benchmark']['after']['pr_auc']:.4f}")
     print(f"before_precision={summary['public_benchmark']['before']['precision']:.4f}")
@@ -73,6 +77,14 @@ def main() -> None:
     print(
         "after_predicted_positive_rate="
         f"{summary['public_benchmark']['after']['predicted_positive_rate']:.4f}"
+    )
+    print(
+        "before_score_mean_hallucination="
+        f"{summary['public_benchmark']['before']['score_distribution']['hallucination']['mean']:.4f}"
+    )
+    print(
+        "after_score_mean_hallucination="
+        f"{summary['public_benchmark']['after']['score_distribution']['hallucination']['mean']:.4f}"
     )
     print(f"before_false_positives={summary['public_benchmark']['before']['false_positive_count']}")
     print(f"before_false_negatives={summary['public_benchmark']['before']['false_negative_count']}")
@@ -88,6 +100,11 @@ def main() -> None:
         f"{summary['recall_recovery']['false_positive_increase_too_much']}"
     )
     print(f"precision_change={summary['precision_change']:.4f}")
+    print(f"guardrails={summary['guardrails']}")
+    print(
+        "recovery_blend_weight="
+        f"{summary['training_config']['recovery_blend_weight']:.4f}"
+    )
     print(f"accept_change={summary['decision']['accept_change']}")
     print(f"rejection_reason={summary['decision']['rejection_reason']}")
     print(f"artifact={summary['artifact_path']}")

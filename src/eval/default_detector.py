@@ -57,6 +57,7 @@ def train_default_detector_head(
     *,
     feature_rows: list[Mapping[str, float]],
     labels: list[int],
+    sample_weights: list[float] | None = None,
 ):
     filtered_rows = filter_default_detector_rows(feature_rows=feature_rows)
-    return train_lightgbm_head(filtered_rows, labels)
+    return train_lightgbm_head(filtered_rows, labels, sample_weights=sample_weights)

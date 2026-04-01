@@ -57,6 +57,8 @@ def test_build_non_public_supervision_dataset_returns_balanced_taxonomy_and_leak
     assert dataset.summary["bucket_label_counts"]["long_responses"]["hallucination_count"] > 0
     assert dataset.summary["bucket_label_ratios"]["numbers"]["hallucination_ratio"] > 0.2
     assert dataset.summary["bucket_label_ratios"]["long_responses"]["hallucination_ratio"] > 0.2
+    assert dataset.summary["effective_label_balance"]["hallucination_ratio"] > 0.35
+    assert dataset.summary["effective_label_balance"]["hallucination_ratio"] < 0.5
     assert "near_duplicate_count" in dataset.summary
     assert "too_trivial_or_unrealistic_count" in dataset.summary
     assert "flagged_too_trivial_or_unrealistic_examples" in dataset.summary
@@ -78,3 +80,6 @@ def test_build_non_public_supervision_dataset_keeps_label_semantics_explicit() -
         - hallucinated_dev_count
         == dataset.summary["non_hallucination_count"]
     )
+    assert len(dataset.train_sample_weights) == len(dataset.train_examples)
+    assert len(dataset.dev_sample_weights) == len(dataset.dev_examples)
+    assert max(dataset.train_sample_weights) > min(dataset.train_sample_weights)
