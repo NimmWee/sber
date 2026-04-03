@@ -11,10 +11,14 @@ from eval.error_analysis import analyze_prediction_errors
 from eval.metrics import compute_pr_auc
 from eval.public_benchmark import load_public_benchmark_examples
 from eval.specialist_ensemble import (
+    ENTITY_CORE_FEATURES,
+    LONG_CORE_FEATURES,
+    NUMERIC_CORE_FEATURES,
     build_all_specialist_blend,
     build_fusion_feature_row,
     build_single_specialist_blend,
     extract_specialist_features,
+    select_important_specialist_features,
     select_specialist_feature_subset,
 )
 from eval.runner import RawLabeledExample
@@ -511,65 +515,93 @@ def _evaluate_specialist_ensemble_variants(
     baseline_train_scores = baseline_head.predict_proba_batch(train_base_rows)
     baseline_validation_scores = baseline_head.predict_proba_batch(validation_base_rows)
 
-    numeric_head = train_lightgbm_head(
-        select_specialist_feature_subset(
-            specialist_rows=train_specialist_rows,
-            prefix="specialist_numeric_",
-        ),
-        train_labels,
+    numeric_train_full_rows = select_specialist_feature_subset(
+        specialist_rows=train_specialist_rows,
+        prefix="specialist_numeric_",
     )
-    entity_head = train_lightgbm_head(
-        select_specialist_feature_subset(
-            specialist_rows=train_specialist_rows,
-            prefix="specialist_entity_",
-        ),
-        train_labels,
+    entity_train_full_rows = select_specialist_feature_subset(
+        specialist_rows=train_specialist_rows,
+        prefix="specialist_entity_",
     )
-    long_head = train_lightgbm_head(
-        select_specialist_feature_subset(
-            specialist_rows=train_specialist_rows,
-            prefix="specialist_long_",
-        ),
-        train_labels,
+    long_train_full_rows = select_specialist_feature_subset(
+        specialist_rows=train_specialist_rows,
+        prefix="specialist_long_",
     )
-
-    numeric_train_scores = numeric_head.predict_proba_batch(
-        select_specialist_feature_subset(
-            specialist_rows=train_specialist_rows,
-            prefix="specialist_numeric_",
-        )
+    numeric_validation_full_rows = select_specialist_feature_subset(
+        specialist_rows=validation_specialist_rows,
+        prefix="specialist_numeric_",
     )
-    entity_train_scores = entity_head.predict_proba_batch(
-        select_specialist_feature_subset(
-            specialist_rows=train_specialist_rows,
-            prefix="specialist_entity_",
-        )
+    entity_validation_full_rows = select_specialist_feature_subset(
+        specialist_rows=validation_specialist_rows,
+        prefix="specialist_entity_",
     )
-    long_train_scores = long_head.predict_proba_batch(
-        select_specialist_feature_subset(
-            specialist_rows=train_specialist_rows,
-            prefix="specialist_long_",
-        )
+    long_validation_full_rows = select_specialist_feature_subset(
+        specialist_rows=validation_specialist_rows,
+        prefix="specialist_long_",
     )
 
-    numeric_validation_scores = numeric_head.predict_proba_batch(
-        select_specialist_feature_subset(
-            specialist_rows=validation_specialist_rows,
-            prefix="specialist_numeric_",
-        )
+    numeric_seed_head = train_lightgbm_head(numeric_train_full_rows, train_labels)
+    entity_seed_head = train_lightgbm_head(entity_train_full_rows, train_labels)
+    long_seed_head = train_lightgbm_head(long_train_full_rows, train_labels)
+
+    numeric_selected_feature_names = select_important_specialist_features(
+        all_feature_names=list(numeric_train_full_rows[0].keys()) if numeric_train_full_rows else [],
+        feature_importance=_lightgbm_feature_importance(numeric_seed_head, top_k=None),
+        required_feature_names=[*NUMERIC_CORE_FEATURES, "specialist_bucket_hint_numbers"],
     )
-    entity_validation_scores = entity_head.predict_proba_batch(
-        select_specialist_feature_subset(
-            specialist_rows=validation_specialist_rows,
-            prefix="specialist_entity_",
-        )
+    entity_selected_feature_names = select_important_specialist_features(
+        all_feature_names=list(entity_train_full_rows[0].keys()) if entity_train_full_rows else [],
+        feature_importance=_lightgbm_feature_importance(entity_seed_head, top_k=None),
+        required_feature_names=[*ENTITY_CORE_FEATURES, "specialist_bucket_hint_entities"],
     )
-    long_validation_scores = long_head.predict_proba_batch(
-        select_specialist_feature_subset(
-            specialist_rows=validation_specialist_rows,
-            prefix="specialist_long_",
-        )
+    long_selected_feature_names = select_important_specialist_features(
+        all_feature_names=list(long_train_full_rows[0].keys()) if long_train_full_rows else [],
+        feature_importance=_lightgbm_feature_importance(long_seed_head, top_k=None),
+        required_feature_names=[*LONG_CORE_FEATURES, "specialist_bucket_hint_long"],
     )
+
+    numeric_train_rows = select_specialist_feature_subset(
+        specialist_rows=train_specialist_rows,
+        prefix="specialist_numeric_",
+        selected_feature_names=numeric_selected_feature_names,
+    )
+    entity_train_rows = select_specialist_feature_subset(
+        specialist_rows=train_specialist_rows,
+        prefix="specialist_entity_",
+        selected_feature_names=entity_selected_feature_names,
+    )
+    long_train_rows = select_specialist_feature_subset(
+        specialist_rows=train_specialist_rows,
+        prefix="specialist_long_",
+        selected_feature_names=long_selected_feature_names,
+    )
+    numeric_validation_rows = select_specialist_feature_subset(
+        specialist_rows=validation_specialist_rows,
+        prefix="specialist_numeric_",
+        selected_feature_names=numeric_selected_feature_names,
+    )
+    entity_validation_rows = select_specialist_feature_subset(
+        specialist_rows=validation_specialist_rows,
+        prefix="specialist_entity_",
+        selected_feature_names=entity_selected_feature_names,
+    )
+    long_validation_rows = select_specialist_feature_subset(
+        specialist_rows=validation_specialist_rows,
+        prefix="specialist_long_",
+        selected_feature_names=long_selected_feature_names,
+    )
+
+    numeric_head = train_lightgbm_head(numeric_train_rows, train_labels)
+    entity_head = train_lightgbm_head(entity_train_rows, train_labels)
+    long_head = train_lightgbm_head(long_train_rows, train_labels)
+
+    numeric_train_scores = numeric_head.predict_proba_batch(numeric_train_rows)
+    entity_train_scores = entity_head.predict_proba_batch(entity_train_rows)
+    long_train_scores = long_head.predict_proba_batch(long_train_rows)
+
+    numeric_validation_scores = numeric_head.predict_proba_batch(numeric_validation_rows)
+    entity_validation_scores = entity_head.predict_proba_batch(entity_validation_rows)
+    long_validation_scores = long_head.predict_proba_batch(long_validation_rows)
 
     variants = {
         "baseline_plus_numeric_specialist": _evaluate_probability_variant(
@@ -589,6 +621,9 @@ def _evaluate_specialist_ensemble_variants(
                 "numeric_specialist_score": _mean(numeric_validation_scores),
             },
             feature_importance=_lightgbm_feature_importance(numeric_head),
+            selected_feature_names=numeric_selected_feature_names,
+            feature_count_before=len(numeric_train_full_rows[0]) if numeric_train_full_rows else 0,
+            feature_count_after=len(numeric_selected_feature_names),
         ),
         "baseline_plus_entity_specialist": _evaluate_probability_variant(
             name="baseline_plus_entity_specialist",
@@ -607,6 +642,9 @@ def _evaluate_specialist_ensemble_variants(
                 "entity_specialist_score": _mean(entity_validation_scores),
             },
             feature_importance=_lightgbm_feature_importance(entity_head),
+            selected_feature_names=entity_selected_feature_names,
+            feature_count_before=len(entity_train_full_rows[0]) if entity_train_full_rows else 0,
+            feature_count_after=len(entity_selected_feature_names),
         ),
         "baseline_plus_long_specialist": _evaluate_probability_variant(
             name="baseline_plus_long_specialist",
@@ -625,6 +663,9 @@ def _evaluate_specialist_ensemble_variants(
                 "long_specialist_score": _mean(long_validation_scores),
             },
             feature_importance=_lightgbm_feature_importance(long_head),
+            selected_feature_names=long_selected_feature_names,
+            feature_count_before=len(long_train_full_rows[0]) if long_train_full_rows else 0,
+            feature_count_after=len(long_selected_feature_names),
         ),
         "baseline_plus_all_specialists": _evaluate_probability_variant(
             name="baseline_plus_all_specialists",
@@ -655,6 +696,23 @@ def _evaluate_specialist_ensemble_variants(
                 _lightgbm_feature_importance(numeric_head)[:3]
                 + _lightgbm_feature_importance(entity_head)[:3]
                 + _lightgbm_feature_importance(long_head)[:3]
+            ),
+            selected_feature_names=sorted(
+                set(
+                    numeric_selected_feature_names
+                    + entity_selected_feature_names
+                    + long_selected_feature_names
+                )
+            ),
+            feature_count_before=(
+                (len(numeric_train_full_rows[0]) if numeric_train_full_rows else 0)
+                + (len(entity_train_full_rows[0]) if entity_train_full_rows else 0)
+                + (len(long_train_full_rows[0]) if long_train_full_rows else 0)
+            ),
+            feature_count_after=(
+                len(numeric_selected_feature_names)
+                + len(entity_selected_feature_names)
+                + len(long_selected_feature_names)
             ),
         ),
     }
@@ -754,6 +812,9 @@ def _evaluate_probability_variant(
     artifact_dir: Path,
     score_components_mean: dict[str, float] | None = None,
     feature_importance: list[dict[str, float]] | None = None,
+    selected_feature_names: list[str] | None = None,
+    feature_count_before: int | None = None,
+    feature_count_after: int | None = None,
     model=None,
 ) -> dict:
     labels = [example.label for example in validation_examples]
@@ -786,6 +847,9 @@ def _evaluate_probability_variant(
             },
             "score_components_mean": score_components_mean or {},
             "feature_importance": feature_importance or [],
+            "selected_feature_names": selected_feature_names or [],
+            "feature_count_before": feature_count_before,
+            "feature_count_after": feature_count_after,
         },
     )
     if model is not None:
@@ -815,6 +879,9 @@ def _evaluate_probability_variant(
         "model_artifact_path": model_artifact,
         "score_components_mean": score_components_mean or {},
         "feature_importance": feature_importance or [],
+        "selected_feature_names": selected_feature_names or [],
+        "feature_count_before": feature_count_before,
+        "feature_count_after": feature_count_after,
     }
 
 
@@ -885,7 +952,7 @@ def _score_distribution(labels: list[int], probabilities: list[float]) -> dict[s
 def _lightgbm_feature_importance(
     head: TrainedLightGBMHead,
     *,
-    top_k: int = 8,
+    top_k: int | None = 8,
 ) -> list[dict[str, float]]:
     importances = head.booster.feature_importance(importance_type="gain")
     ranked = sorted(
@@ -893,11 +960,12 @@ def _lightgbm_feature_importance(
         key=lambda item: float(item[1]),
         reverse=True,
     )
-    return [
+    rows = [
         {"feature_name": feature_name, "importance": float(importance)}
-        for feature_name, importance in ranked[:top_k]
+        for feature_name, importance in (ranked if top_k is None else ranked[:top_k])
         if float(importance) > 0.0
     ]
+    return rows
 
 
 def _distribution_stats(values: list[float]) -> dict[str, float]:

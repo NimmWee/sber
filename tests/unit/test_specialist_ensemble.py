@@ -8,7 +8,11 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from eval.specialist_ensemble import extract_specialist_features, build_fusion_feature_row
+from eval.specialist_ensemble import (
+    build_fusion_feature_row,
+    extract_specialist_features,
+    select_important_specialist_features,
+)
 from features.extractor import InternalModelSignal, TokenUncertaintyStat
 
 
@@ -134,3 +138,29 @@ def test_extract_specialist_features_increase_local_anomaly_scores_for_spiky_seq
     assert spiky["specialist_numeric_local_margin_dip"] > stable["specialist_numeric_local_margin_dip"]
     assert spiky["specialist_local_uncertainty_spike"] > stable["specialist_local_uncertainty_spike"]
     assert spiky["specialist_long_local_anomaly_peak"] > stable["specialist_long_local_anomaly_peak"]
+
+
+def test_select_important_specialist_features_keeps_required_and_top_ranked_features() -> None:
+    selected = select_important_specialist_features(
+        all_feature_names=[
+            "specialist_numeric_density",
+            "specialist_numeric_margin_min",
+            "specialist_numeric_local_entropy_spike",
+            "specialist_local_uncertainty_spike",
+            "specialist_entity_local_instability",
+        ],
+        feature_importance=[
+            {"feature_name": "specialist_numeric_margin_min", "importance": 9.0},
+            {"feature_name": "specialist_entity_local_instability", "importance": 7.0},
+            {"feature_name": "specialist_numeric_local_entropy_spike", "importance": 0.2},
+            {"feature_name": "specialist_local_uncertainty_spike", "importance": 0.1},
+        ],
+        required_feature_names=["specialist_numeric_density"],
+        max_selected_features=3,
+    )
+
+    assert "specialist_numeric_density" in selected
+    assert "specialist_numeric_margin_min" in selected
+    assert "specialist_entity_local_instability" in selected
+    assert "specialist_numeric_local_entropy_spike" not in selected
+    assert "specialist_local_uncertainty_spike" not in selected

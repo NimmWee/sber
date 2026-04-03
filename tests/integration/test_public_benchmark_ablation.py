@@ -93,6 +93,13 @@ def test_run_public_benchmark_ablation_writes_summary(tmp_path) -> None:
     assert "score_distribution" in summary["variants"]["fused_specialist_ensemble"]
     assert "feature_importance" in summary["variants"]["baseline_plus_numeric_specialist"]
     assert "bucket_summaries" in summary["variants"]["baseline_plus_all_specialists"]
+    assert "selected_feature_names" in summary["variants"]["baseline_plus_all_specialists"]
+    assert "feature_count_before" in summary["variants"]["baseline_plus_all_specialists"]
+    assert "feature_count_after" in summary["variants"]["baseline_plus_all_specialists"]
+    assert (
+        summary["variants"]["baseline_plus_all_specialists"]["feature_count_after"]
+        < summary["variants"]["baseline_plus_all_specialists"]["feature_count_before"]
+    )
     assert "best_variant" in summary
     assert Path(summary["artifact_path"]).exists()
 

@@ -8,6 +8,36 @@ from features.extractor import InternalModelSignal, TokenUncertaintyStat
 NUMBER_PATTERN = re.compile(r"\d")
 TITLECASE_PATTERN = re.compile(r"^[A-Z][a-zA-Z-]+$")
 
+NUMERIC_CORE_FEATURES = (
+    "specialist_numeric_density",
+    "specialist_numeric_span_count",
+    "specialist_numeric_margin_mean",
+    "specialist_numeric_margin_min",
+    "specialist_numeric_entropy_mean",
+    "specialist_numeric_logprob_asymmetry",
+    "specialist_numeric_tail_suspicion",
+)
+ENTITY_CORE_FEATURES = (
+    "specialist_entity_density",
+    "specialist_entity_margin_mean",
+    "specialist_entity_margin_min",
+    "specialist_entity_entropy_mean",
+    "specialist_entity_confidence_dip",
+    "specialist_entity_segment_suspicion",
+)
+LONG_CORE_FEATURES = (
+    "specialist_long_length_bucket",
+    "specialist_long_entropy_drift",
+    "specialist_long_margin_drift",
+    "specialist_long_segment_variance",
+    "specialist_long_max_suspicious_segment_score",
+    "specialist_long_longest_suspicious_run",
+)
+SHARED_SPECIALIST_HINT_FEATURES = (
+    "specialist_internal_disagreement_hint",
+    "specialist_internal_consistency_hint",
+)
+
 
 def extract_specialist_features(
     *,
@@ -121,15 +151,60 @@ def select_specialist_feature_subset(
     *,
     specialist_rows: list[dict[str, float]],
     prefix: str,
+    selected_feature_names: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict[str, float]]:
+    selected = set(selected_feature_names or [])
     return [
         {
             name: value
             for name, value in row.items()
-            if name.startswith(prefix) or name in {"specialist_internal_disagreement_hint", "specialist_internal_consistency_hint"}
+            if (
+                (name.startswith(prefix) or name in SHARED_SPECIALIST_HINT_FEATURES)
+                and (not selected or name in selected)
+            )
         }
         for row in specialist_rows
     ]
+
+
+def select_important_specialist_features(
+    *,
+    all_feature_names: list[str] | tuple[str, ...],
+    feature_importance: list[dict[str, float]],
+    required_feature_names: list[str] | tuple[str, ...],
+    max_selected_features: int = 12,
+    min_importance: float = 0.5,
+) -> list[str]:
+    available = set(all_feature_names)
+    required = [name for name in required_feature_names if name in available]
+    ranked_optional = [
+        row["feature_name"]
+        for row in sorted(
+            feature_importance,
+            key=lambda row: float(row["importance"]),
+            reverse=True,
+        )
+        if row["feature_name"] in available
+        and row["feature_name"] not in required
+        and float(row["importance"]) >= min_importance
+    ]
+    selected = set(required)
+    for name in ranked_optional:
+        if len(selected) >= max_selected_features:
+            break
+        selected.add(name)
+    if len(selected) == len(required):
+        for row in sorted(
+            feature_importance,
+            key=lambda row: float(row["importance"]),
+            reverse=True,
+        ):
+            name = row["feature_name"]
+            if name in available and name not in selected:
+                selected.add(name)
+                if len(selected) >= min(max_selected_features, len(available)):
+                    break
+    return [name for name in all_feature_names if name in selected]
 
 
 def build_single_specialist_blend(
