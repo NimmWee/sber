@@ -53,6 +53,22 @@ def resolve_public_benchmark_path(
     raise FileNotFoundError("knowledge_bench_public.csv was not found")
 
 
+def resolve_text_training_seed_path(
+    *,
+    project_root: str | Path,
+    explicit_seed_path: str | Path | None = None,
+) -> Path:
+    if explicit_seed_path is not None:
+        return Path(explicit_seed_path)
+
+    project_root_path = Path(project_root)
+    default_candidate = project_root_path / "data" / "public_seed_facts.jsonl"
+    if default_candidate.exists():
+        return default_candidate
+
+    raise FileNotFoundError("public_seed_facts.jsonl was not found")
+
+
 def write_json_artifact(
     *,
     artifact_dir: str | Path,

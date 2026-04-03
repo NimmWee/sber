@@ -13,6 +13,7 @@ from utils.script_helpers import (
     build_ablation_examples,
     load_transformers_provider_config,
     resolve_public_benchmark_path,
+    resolve_text_training_seed_path,
     resolve_transformers_provider_config,
     write_json_artifact,
 )
@@ -220,3 +221,29 @@ def test_resolve_public_benchmark_path_falls_back_to_project_root_file(tmp_path)
     resolved = resolve_public_benchmark_path(project_root=project_root)
 
     assert resolved == dataset_path
+
+
+def test_resolve_text_training_seed_path_prefers_explicit_path(tmp_path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    explicit_path = tmp_path / "custom_seed_facts.jsonl"
+    explicit_path.write_text("{}", encoding="utf-8")
+
+    resolved = resolve_text_training_seed_path(
+        project_root=project_root,
+        explicit_seed_path=explicit_path,
+    )
+
+    assert resolved == explicit_path
+
+
+def test_resolve_text_training_seed_path_uses_default_data_file(tmp_path) -> None:
+    project_root = tmp_path / "project"
+    data_dir = project_root / "data"
+    data_dir.mkdir(parents=True)
+    seed_path = data_dir / "public_seed_facts.jsonl"
+    seed_path.write_text("{}", encoding="utf-8")
+
+    resolved = resolve_text_training_seed_path(project_root=project_root)
+
+    assert resolved == seed_path
