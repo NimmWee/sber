@@ -25,6 +25,10 @@ def extract_specialist_features(
     logprobs = [float(stat.logprob) for stat in stats]
     entropies = [float(stat.entropy) for stat in stats]
     margins = [float(stat.top1_top2_margin) for stat in stats]
+    sliding_entropy_scores = _sliding_window_scores(entropies)
+    sliding_margin_scores = _sliding_window_scores(margins)
+    global_entropy_mean = _mean(entropies)
+    global_margin_mean = _mean(margins)
 
     return {
         "specialist_numeric_density": len(numeric_indices) / token_count,
@@ -34,20 +38,61 @@ def extract_specialist_features(
         "specialist_numeric_entropy_mean": _subset_mean(entropies, numeric_indices),
         "specialist_numeric_logprob_asymmetry": _subset_mean(logprobs, numeric_indices) - _mean(logprobs),
         "specialist_numeric_tail_suspicion": _tail_suspicion(indices=numeric_indices, margins=margins, entropies=entropies),
+        "specialist_numeric_small_delta_proxy": _small_numeric_delta_proxy(tokens, numeric_indices),
+        "specialist_numeric_inconsistency_count": float(_numeric_inconsistency_count(tokens, numeric_indices)),
+        "specialist_numeric_isolated_low_confidence_rate": _isolated_low_confidence_rate(
+            indices=numeric_indices,
+            logprobs=logprobs,
+            entropies=entropies,
+            margins=margins,
+        ),
+        "specialist_numeric_local_margin_dip": _local_margin_dip(
+            indices=numeric_indices,
+            margins=margins,
+            global_margin_mean=global_margin_mean,
+        ),
+        "specialist_numeric_local_entropy_spike": _local_entropy_spike(
+            indices=numeric_indices,
+            entropies=entropies,
+            global_entropy_mean=global_entropy_mean,
+        ),
         "specialist_entity_density": len(entity_indices) / token_count,
         "specialist_entity_margin_mean": _subset_mean(margins, entity_indices),
         "specialist_entity_margin_min": _subset_min(margins, entity_indices),
         "specialist_entity_entropy_mean": _subset_mean(entropies, entity_indices),
         "specialist_entity_confidence_dip": _mean(margins) - _subset_mean(margins, entity_indices),
         "specialist_entity_segment_suspicion": _segment_suspicion(entity_indices, entropies, margins),
+        "specialist_entity_margin_variance": _subset_variance(margins, entity_indices),
+        "specialist_entity_local_margin_drop": _local_margin_dip(
+            indices=entity_indices,
+            margins=margins,
+            global_margin_mean=global_margin_mean,
+        ),
+        "specialist_entity_local_instability": _local_instability(
+            indices=entity_indices,
+            entropies=entropies,
+            margins=margins,
+        ),
+        "specialist_entity_segment_inconsistency": _segment_inconsistency(
+            indices=entity_indices,
+            entropies=entropies,
+            margins=margins,
+        ),
         "specialist_long_length_bucket": _length_bucket(response),
         "specialist_long_entropy_drift": _tail_mean(entropies) - _head_mean(entropies),
         "specialist_long_margin_drift": _head_mean(margins) - _tail_mean(margins),
         "specialist_long_segment_variance": _segment_variance(entropies),
         "specialist_long_max_suspicious_segment_score": _max_suspicious_segment_score(entropies, margins),
         "specialist_long_longest_suspicious_run": float(_longest_suspicious_run(entropies, margins)),
+        "specialist_long_sliding_entropy_max": max(sliding_entropy_scores) if sliding_entropy_scores else 0.0,
+        "specialist_long_sliding_entropy_variance": _variance(sliding_entropy_scores),
+        "specialist_long_sliding_margin_min": min(sliding_margin_scores) if sliding_margin_scores else 0.0,
+        "specialist_long_local_anomaly_peak": _local_anomaly_peak(entropies, margins),
+        "specialist_long_inconsistent_span": float(_longest_local_anomaly_run(entropies, margins)),
         "specialist_internal_disagreement_hint": float(internal_signal.layer_disagreement_mean) if internal_signal else 0.0,
         "specialist_internal_consistency_hint": float(internal_signal.early_late_layer_consistency) if internal_signal else 0.0,
+        "specialist_local_uncertainty_spike": _local_uncertainty_spike(entropies, global_entropy_mean),
+        "specialist_local_margin_dip_contrast": _local_margin_dip_contrast(margins, global_margin_mean),
         "specialist_bucket_hint_numbers": 1.0 if ("how many" in prompt.lower() or any(character.isdigit() for character in response)) else 0.0,
         "specialist_bucket_hint_entities": 1.0 if entity_indices else 0.0,
         "specialist_bucket_hint_long": 1.0 if len(response.split()) > 18 else 0.0,
@@ -140,6 +185,11 @@ def _subset_min(values: list[float], indices: list[int]) -> float:
     return min(selected) if selected else 0.0
 
 
+def _subset_variance(values: list[float], indices: list[int]) -> float:
+    selected = [values[index] for index in indices if index < len(values)]
+    return _variance(selected)
+
+
 def _tail_suspicion(*, indices: list[int], margins: list[float], entropies: list[float]) -> float:
     if not indices:
         return 0.0
@@ -167,6 +217,13 @@ def _segment_suspicion(indices: list[int], entropies: list[float], margins: list
             _subset_mean(entropies, segment_indices) - _subset_mean(margins, segment_indices)
         )
     return max(segment_scores) if segment_scores else 0.0
+
+
+def _segment_inconsistency(indices: list[int], entropies: list[float], margins: list[float]) -> float:
+    if not indices:
+        return 0.0
+    segment_scores = _entity_region_scores(indices=indices, entropies=entropies, margins=margins)
+    return _variance(segment_scores)
 
 
 def _length_bucket(response: str) -> float:
@@ -207,6 +264,13 @@ def _segment_variance(values: list[float]) -> float:
     return _mean([(value - overall) ** 2 for value in means])
 
 
+def _variance(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    mean = _mean(values)
+    return _mean([(value - mean) ** 2 for value in values])
+
+
 def _max_suspicious_segment_score(entropies: list[float], margins: list[float]) -> float:
     if not entropies or not margins:
         return 0.0
@@ -220,6 +284,168 @@ def _max_suspicious_segment_score(entropies: list[float], margins: list[float]) 
         if segment_entropies and segment_margins:
             scores.append(_mean(segment_entropies) - _mean(segment_margins))
     return max(scores) if scores else 0.0
+
+
+def _sliding_window_scores(values: list[float], window_size: int = 3) -> list[float]:
+    if not values:
+        return []
+    if len(values) <= window_size:
+        return [_mean(values)]
+    return [_mean(values[index : index + window_size]) for index in range(len(values) - window_size + 1)]
+
+
+def _small_numeric_delta_proxy(tokens: list[str], numeric_indices: list[int]) -> float:
+    numeric_values = []
+    for index in numeric_indices:
+        token = _normalize_token(tokens[index]).replace(",", "")
+        try:
+            numeric_values.append(float(token))
+        except ValueError:
+            continue
+    if len(numeric_values) < 2:
+        return 0.0
+    deltas = [abs(right - left) for left, right in zip(numeric_values, numeric_values[1:])]
+    if not deltas:
+        return 0.0
+    smallest_delta = min(deltas)
+    return 1.0 / (1.0 + smallest_delta)
+
+
+def _numeric_inconsistency_count(tokens: list[str], numeric_indices: list[int]) -> int:
+    numeric_values = []
+    for index in numeric_indices:
+        token = _normalize_token(tokens[index]).replace(",", "")
+        try:
+            numeric_values.append(float(token))
+        except ValueError:
+            continue
+    if len(numeric_values) < 2:
+        return 0
+    return sum(abs(right - left) > 1.0 for left, right in zip(numeric_values, numeric_values[1:]))
+
+
+def _isolated_low_confidence_rate(
+    *,
+    indices: list[int],
+    logprobs: list[float],
+    entropies: list[float],
+    margins: list[float],
+) -> float:
+    if not indices:
+        return 0.0
+    suspicious = 0
+    for index in indices:
+        if (
+            index < len(logprobs)
+            and index < len(entropies)
+            and index < len(margins)
+            and (logprobs[index] <= -1.0 or entropies[index] >= 0.8 or margins[index] <= 0.15)
+        ):
+            suspicious += 1
+    return suspicious / len(indices)
+
+
+def _local_margin_dip(
+    *,
+    indices: list[int],
+    margins: list[float],
+    global_margin_mean: float,
+) -> float:
+    if not indices or not margins:
+        return 0.0
+    local_means = []
+    for index in indices:
+        start = max(0, index - 1)
+        end = min(len(margins), index + 2)
+        local_means.append(_mean(margins[start:end]))
+    return max(0.0, global_margin_mean - _mean(local_means))
+
+
+def _local_entropy_spike(
+    *,
+    indices: list[int],
+    entropies: list[float],
+    global_entropy_mean: float,
+) -> float:
+    if not indices or not entropies:
+        return 0.0
+    local_means = []
+    for index in indices:
+        start = max(0, index - 1)
+        end = min(len(entropies), index + 2)
+        local_means.append(_mean(entropies[start:end]))
+    return max(0.0, _mean(local_means) - global_entropy_mean)
+
+
+def _local_instability(
+    *,
+    indices: list[int],
+    entropies: list[float],
+    margins: list[float],
+) -> float:
+    if not indices:
+        return 0.0
+    local_scores = []
+    for index in indices:
+        if index >= len(entropies) or index >= len(margins):
+            continue
+        local_scores.append(entropies[index] - margins[index])
+    return _variance(local_scores)
+
+
+def _entity_region_scores(
+    *,
+    indices: list[int],
+    entropies: list[float],
+    margins: list[float],
+) -> list[float]:
+    if not indices:
+        return []
+    segment_size = max(1, len(entropies) // 3)
+    scores: list[float] = []
+    for segment_index in range(3):
+        start = segment_index * segment_size
+        end = len(entropies) if segment_index == 2 else min(len(entropies), start + segment_size)
+        segment_indices = [index for index in indices if start <= index < end]
+        if not segment_indices:
+            continue
+        scores.append(_subset_mean(entropies, segment_indices) - _subset_mean(margins, segment_indices))
+    return scores
+
+
+def _local_anomaly_peak(entropies: list[float], margins: list[float]) -> float:
+    if not entropies or not margins:
+        return 0.0
+    peaks = []
+    for entropy_mean, margin_mean in zip(_sliding_window_scores(entropies), _sliding_window_scores(margins)):
+        peaks.append(entropy_mean - margin_mean)
+    return max(peaks) if peaks else 0.0
+
+
+def _longest_local_anomaly_run(entropies: list[float], margins: list[float]) -> int:
+    longest = 0
+    current = 0
+    entropy_mean = _mean(entropies)
+    margin_mean = _mean(margins)
+    for entropy, margin in zip(entropies, margins):
+        if entropy > entropy_mean + 0.2 or margin < margin_mean - 0.2:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
+def _local_uncertainty_spike(entropies: list[float], global_entropy_mean: float) -> float:
+    if not entropies:
+        return 0.0
+    return max(0.0, max(entropies) - global_entropy_mean)
+
+
+def _local_margin_dip_contrast(margins: list[float], global_margin_mean: float) -> float:
+    if not margins:
+        return 0.0
+    return max(0.0, global_margin_mean - min(margins))
 
 
 def _longest_suspicious_run(entropies: list[float], margins: list[float]) -> int:

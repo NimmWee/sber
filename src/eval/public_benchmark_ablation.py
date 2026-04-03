@@ -316,6 +316,15 @@ def _evaluate_variant(
             "false_positive_count": error_summary.false_positive_count,
             "false_negative_count": error_summary.false_negative_count,
             "non_trivial_buckets": error_summary.non_trivial_buckets,
+            "bucket_summaries": {
+                bucket_name: asdict(bucket_summary)
+                for bucket_name, bucket_summary in error_summary.bucket_summaries.items()
+            },
+            "feature_importance": (
+                _lightgbm_feature_importance(head)
+                if head_kind == "lightgbm"
+                else []
+            ),
         },
     )
     return {
@@ -330,7 +339,16 @@ def _evaluate_variant(
         "false_positive_count": error_summary.false_positive_count,
         "false_negative_count": error_summary.false_negative_count,
         "non_trivial_buckets": error_summary.non_trivial_buckets,
+        "bucket_summaries": {
+            bucket_name: asdict(bucket_summary)
+            for bucket_name, bucket_summary in error_summary.bucket_summaries.items()
+        },
         "score_distribution": score_distribution,
+        "feature_importance": (
+            _lightgbm_feature_importance(head)
+            if head_kind == "lightgbm"
+            else []
+        ),
         "hardest_examples": [asdict(example) for example in error_summary.hardest_examples],
         "summary_artifact_path": str(summary_artifact_path),
         "model_artifact_path": str(model_artifact_path),
@@ -570,6 +588,7 @@ def _evaluate_specialist_ensemble_variants(
                 "baseline_score": _mean(baseline_validation_scores),
                 "numeric_specialist_score": _mean(numeric_validation_scores),
             },
+            feature_importance=_lightgbm_feature_importance(numeric_head),
         ),
         "baseline_plus_entity_specialist": _evaluate_probability_variant(
             name="baseline_plus_entity_specialist",
@@ -587,6 +606,7 @@ def _evaluate_specialist_ensemble_variants(
                 "baseline_score": _mean(baseline_validation_scores),
                 "entity_specialist_score": _mean(entity_validation_scores),
             },
+            feature_importance=_lightgbm_feature_importance(entity_head),
         ),
         "baseline_plus_long_specialist": _evaluate_probability_variant(
             name="baseline_plus_long_specialist",
@@ -604,6 +624,7 @@ def _evaluate_specialist_ensemble_variants(
                 "baseline_score": _mean(baseline_validation_scores),
                 "long_specialist_score": _mean(long_validation_scores),
             },
+            feature_importance=_lightgbm_feature_importance(long_head),
         ),
         "baseline_plus_all_specialists": _evaluate_probability_variant(
             name="baseline_plus_all_specialists",
@@ -630,6 +651,11 @@ def _evaluate_specialist_ensemble_variants(
                 "entity_specialist_score": _mean(entity_validation_scores),
                 "long_specialist_score": _mean(long_validation_scores),
             },
+            feature_importance=(
+                _lightgbm_feature_importance(numeric_head)[:3]
+                + _lightgbm_feature_importance(entity_head)[:3]
+                + _lightgbm_feature_importance(long_head)[:3]
+            ),
         ),
     }
 
@@ -683,6 +709,7 @@ def _evaluate_specialist_ensemble_variants(
             "entity_specialist_score": _mean(entity_validation_scores),
             "long_specialist_score": _mean(long_validation_scores),
         },
+        feature_importance=_lightgbm_feature_importance(fusion_head),
         model=head_to_artifact(fusion_head),
     )
     return variants
@@ -726,6 +753,7 @@ def _evaluate_probability_variant(
     latency_total_mean_ms: float,
     artifact_dir: Path,
     score_components_mean: dict[str, float] | None = None,
+    feature_importance: list[dict[str, float]] | None = None,
     model=None,
 ) -> dict:
     labels = [example.label for example in validation_examples]
@@ -752,7 +780,12 @@ def _evaluate_probability_variant(
             "latency_total_mean_ms": latency_total_mean_ms,
             "score_distribution": score_distribution,
             "non_trivial_buckets": error_summary.non_trivial_buckets,
+            "bucket_summaries": {
+                bucket_name: asdict(bucket_summary)
+                for bucket_name, bucket_summary in error_summary.bucket_summaries.items()
+            },
             "score_components_mean": score_components_mean or {},
+            "feature_importance": feature_importance or [],
         },
     )
     if model is not None:
@@ -772,11 +805,16 @@ def _evaluate_probability_variant(
         "false_positive_count": error_summary.false_positive_count,
         "false_negative_count": error_summary.false_negative_count,
         "non_trivial_buckets": error_summary.non_trivial_buckets,
+        "bucket_summaries": {
+            bucket_name: asdict(bucket_summary)
+            for bucket_name, bucket_summary in error_summary.bucket_summaries.items()
+        },
         "score_distribution": score_distribution,
         "hardest_examples": [asdict(example) for example in error_summary.hardest_examples],
         "summary_artifact_path": str(summary_artifact_path),
         "model_artifact_path": model_artifact,
         "score_components_mean": score_components_mean or {},
+        "feature_importance": feature_importance or [],
     }
 
 
@@ -842,6 +880,24 @@ def _score_distribution(labels: list[int], probabilities: list[float]) -> dict[s
         "hallucination": _distribution_stats(hallucination_scores),
         "non_hallucination": _distribution_stats(non_hallucination_scores),
     }
+
+
+def _lightgbm_feature_importance(
+    head: TrainedLightGBMHead,
+    *,
+    top_k: int = 8,
+) -> list[dict[str, float]]:
+    importances = head.booster.feature_importance(importance_type="gain")
+    ranked = sorted(
+        zip(head.feature_names, importances),
+        key=lambda item: float(item[1]),
+        reverse=True,
+    )
+    return [
+        {"feature_name": feature_name, "importance": float(importance)}
+        for feature_name, importance in ranked[:top_k]
+        if float(importance) > 0.0
+    ]
 
 
 def _distribution_stats(values: list[float]) -> dict[str, float]:
