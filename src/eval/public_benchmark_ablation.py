@@ -11,6 +11,7 @@ from eval.error_analysis import analyze_prediction_errors
 from eval.metrics import compute_pr_auc
 from eval.public_benchmark import load_public_benchmark_examples
 from eval.specialist_ensemble import (
+    CONSISTENCY_CORE_FEATURES,
     ENTITY_CORE_FEATURES,
     LONG_CORE_FEATURES,
     NUMERIC_CORE_FEATURES,
@@ -527,6 +528,10 @@ def _evaluate_specialist_ensemble_variants(
         specialist_rows=train_specialist_rows,
         prefix="specialist_long_",
     )
+    consistency_train_full_rows = select_specialist_feature_subset(
+        specialist_rows=train_specialist_rows,
+        prefix="specialist_consistency_",
+    )
     numeric_validation_full_rows = select_specialist_feature_subset(
         specialist_rows=validation_specialist_rows,
         prefix="specialist_numeric_",
@@ -539,10 +544,15 @@ def _evaluate_specialist_ensemble_variants(
         specialist_rows=validation_specialist_rows,
         prefix="specialist_long_",
     )
+    consistency_validation_full_rows = select_specialist_feature_subset(
+        specialist_rows=validation_specialist_rows,
+        prefix="specialist_consistency_",
+    )
 
     numeric_seed_head = train_lightgbm_head(numeric_train_full_rows, train_labels)
     entity_seed_head = train_lightgbm_head(entity_train_full_rows, train_labels)
     long_seed_head = train_lightgbm_head(long_train_full_rows, train_labels)
+    consistency_seed_head = train_lightgbm_head(consistency_train_full_rows, train_labels)
 
     numeric_selected_feature_names = select_important_specialist_features(
         all_feature_names=list(numeric_train_full_rows[0].keys()) if numeric_train_full_rows else [],
@@ -558,6 +568,11 @@ def _evaluate_specialist_ensemble_variants(
         all_feature_names=list(long_train_full_rows[0].keys()) if long_train_full_rows else [],
         feature_importance=_lightgbm_feature_importance(long_seed_head, top_k=None),
         required_feature_names=[*LONG_CORE_FEATURES, "specialist_bucket_hint_long"],
+    )
+    consistency_selected_feature_names = select_important_specialist_features(
+        all_feature_names=list(consistency_train_full_rows[0].keys()) if consistency_train_full_rows else [],
+        feature_importance=_lightgbm_feature_importance(consistency_seed_head, top_k=None),
+        required_feature_names=[*CONSISTENCY_CORE_FEATURES],
     )
 
     numeric_train_rows = select_specialist_feature_subset(
@@ -575,6 +590,11 @@ def _evaluate_specialist_ensemble_variants(
         prefix="specialist_long_",
         selected_feature_names=long_selected_feature_names,
     )
+    consistency_train_rows = select_specialist_feature_subset(
+        specialist_rows=train_specialist_rows,
+        prefix="specialist_consistency_",
+        selected_feature_names=consistency_selected_feature_names,
+    )
     numeric_validation_rows = select_specialist_feature_subset(
         specialist_rows=validation_specialist_rows,
         prefix="specialist_numeric_",
@@ -590,18 +610,26 @@ def _evaluate_specialist_ensemble_variants(
         prefix="specialist_long_",
         selected_feature_names=long_selected_feature_names,
     )
+    consistency_validation_rows = select_specialist_feature_subset(
+        specialist_rows=validation_specialist_rows,
+        prefix="specialist_consistency_",
+        selected_feature_names=consistency_selected_feature_names,
+    )
 
     numeric_head = train_lightgbm_head(numeric_train_rows, train_labels)
     entity_head = train_lightgbm_head(entity_train_rows, train_labels)
     long_head = train_lightgbm_head(long_train_rows, train_labels)
+    consistency_head = train_lightgbm_head(consistency_train_rows, train_labels)
 
     numeric_train_scores = numeric_head.predict_proba_batch(numeric_train_rows)
     entity_train_scores = entity_head.predict_proba_batch(entity_train_rows)
     long_train_scores = long_head.predict_proba_batch(long_train_rows)
+    consistency_train_scores = consistency_head.predict_proba_batch(consistency_train_rows)
 
     numeric_validation_scores = numeric_head.predict_proba_batch(numeric_validation_rows)
     entity_validation_scores = entity_head.predict_proba_batch(entity_validation_rows)
     long_validation_scores = long_head.predict_proba_batch(long_validation_rows)
+    consistency_validation_scores = consistency_head.predict_proba_batch(consistency_validation_rows)
 
     variants = {
         "baseline_plus_numeric_specialist": _evaluate_probability_variant(
@@ -667,6 +695,27 @@ def _evaluate_specialist_ensemble_variants(
             feature_count_before=len(long_train_full_rows[0]) if long_train_full_rows else 0,
             feature_count_after=len(long_selected_feature_names),
         ),
+        "baseline_plus_consistency_specialist": _evaluate_probability_variant(
+            name="baseline_plus_consistency_specialist",
+            probabilities=build_single_specialist_blend(
+                baseline_scores=baseline_validation_scores,
+                specialist_scores=consistency_validation_scores,
+            ),
+            validation_examples=validation_examples,
+            latency_total_mean_ms=_measure_score_only_latency(
+                [baseline_validation_scores[0], consistency_validation_scores[0]],
+                repeat_count=latency_repeat_count,
+            ),
+            artifact_dir=artifact_dir / "baseline_plus_consistency_specialist",
+            score_components_mean={
+                "baseline_score": _mean(baseline_validation_scores),
+                "consistency_specialist_score": _mean(consistency_validation_scores),
+            },
+            feature_importance=_lightgbm_feature_importance(consistency_head),
+            selected_feature_names=consistency_selected_feature_names,
+            feature_count_before=len(consistency_train_full_rows[0]) if consistency_train_full_rows else 0,
+            feature_count_after=len(consistency_selected_feature_names),
+        ),
         "baseline_plus_all_specialists": _evaluate_probability_variant(
             name="baseline_plus_all_specialists",
             probabilities=build_all_specialist_blend(
@@ -674,6 +723,7 @@ def _evaluate_specialist_ensemble_variants(
                 numeric_scores=numeric_validation_scores,
                 entity_scores=entity_validation_scores,
                 long_scores=long_validation_scores,
+                consistency_scores=consistency_validation_scores,
             ),
             validation_examples=validation_examples,
             latency_total_mean_ms=_measure_score_only_latency(
@@ -682,6 +732,7 @@ def _evaluate_specialist_ensemble_variants(
                     numeric_validation_scores[0],
                     entity_validation_scores[0],
                     long_validation_scores[0],
+                    consistency_validation_scores[0],
                 ],
                 repeat_count=latency_repeat_count,
             ),
@@ -691,28 +742,33 @@ def _evaluate_specialist_ensemble_variants(
                 "numeric_specialist_score": _mean(numeric_validation_scores),
                 "entity_specialist_score": _mean(entity_validation_scores),
                 "long_specialist_score": _mean(long_validation_scores),
+                "consistency_specialist_score": _mean(consistency_validation_scores),
             },
             feature_importance=(
                 _lightgbm_feature_importance(numeric_head)[:3]
                 + _lightgbm_feature_importance(entity_head)[:3]
                 + _lightgbm_feature_importance(long_head)[:3]
+                + _lightgbm_feature_importance(consistency_head)[:3]
             ),
             selected_feature_names=sorted(
                 set(
                     numeric_selected_feature_names
                     + entity_selected_feature_names
                     + long_selected_feature_names
+                    + consistency_selected_feature_names
                 )
             ),
             feature_count_before=(
                 (len(numeric_train_full_rows[0]) if numeric_train_full_rows else 0)
                 + (len(entity_train_full_rows[0]) if entity_train_full_rows else 0)
                 + (len(long_train_full_rows[0]) if long_train_full_rows else 0)
+                + (len(consistency_train_full_rows[0]) if consistency_train_full_rows else 0)
             ),
             feature_count_after=(
                 len(numeric_selected_feature_names)
                 + len(entity_selected_feature_names)
                 + len(long_selected_feature_names)
+                + len(consistency_selected_feature_names)
             ),
         ),
     }
@@ -826,6 +882,7 @@ def _evaluate_probability_variant(
     )
     metrics = _binary_metrics(labels, probabilities)
     score_distribution = _score_distribution(labels, probabilities)
+    score_label_correlation = _score_label_correlation(labels, probabilities)
     artifact_dir.mkdir(parents=True, exist_ok=True)
     summary_artifact_path = write_json_artifact(
         artifact_dir=artifact_dir,
@@ -840,6 +897,7 @@ def _evaluate_probability_variant(
             "false_negative_count": error_summary.false_negative_count,
             "latency_total_mean_ms": latency_total_mean_ms,
             "score_distribution": score_distribution,
+            "score_label_correlation": score_label_correlation,
             "non_trivial_buckets": error_summary.non_trivial_buckets,
             "bucket_summaries": {
                 bucket_name: asdict(bucket_summary)
@@ -874,6 +932,7 @@ def _evaluate_probability_variant(
             for bucket_name, bucket_summary in error_summary.bucket_summaries.items()
         },
         "score_distribution": score_distribution,
+        "score_label_correlation": score_label_correlation,
         "hardest_examples": [asdict(example) for example in error_summary.hardest_examples],
         "summary_artifact_path": str(summary_artifact_path),
         "model_artifact_path": model_artifact,
@@ -978,6 +1037,24 @@ def _distribution_stats(values: list[float]) -> dict[str, float]:
         "q50": _quantile(ordered, 0.50),
         "q90": _quantile(ordered, 0.90),
     }
+
+
+def _score_label_correlation(labels: list[int], probabilities: list[float]) -> float:
+    if not labels or not probabilities or len(labels) != len(probabilities):
+        return 0.0
+    label_mean = sum(labels) / len(labels)
+    probability_mean = sum(probabilities) / len(probabilities)
+    covariance = sum(
+        (float(label) - label_mean) * (float(probability) - probability_mean)
+        for label, probability in zip(labels, probabilities)
+    )
+    label_variance = sum((float(label) - label_mean) ** 2 for label in labels)
+    probability_variance = sum(
+        (float(probability) - probability_mean) ** 2 for probability in probabilities
+    )
+    if label_variance <= 0.0 or probability_variance <= 0.0:
+        return 0.0
+    return covariance / ((label_variance ** 0.5) * (probability_variance ** 0.5))
 
 
 def _mean(values: list[float]) -> float:

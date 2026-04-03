@@ -164,3 +164,41 @@ def test_select_important_specialist_features_keeps_required_and_top_ranked_feat
     assert "specialist_entity_local_instability" in selected
     assert "specialist_numeric_local_entropy_spike" not in selected
     assert "specialist_local_uncertainty_spike" not in selected
+
+
+def test_extract_specialist_features_adds_consistency_signals_for_segment_drift() -> None:
+    coherent_stats = [
+        TokenUncertaintyStat("Paris", -0.2, 0.2, 0.7),
+        TokenUncertaintyStat("is", -0.15, 0.18, 0.68),
+        TokenUncertaintyStat("the", -0.12, 0.16, 0.69),
+        TokenUncertaintyStat("capital", -0.16, 0.2, 0.66),
+        TokenUncertaintyStat("of", -0.12, 0.16, 0.69),
+        TokenUncertaintyStat("France", -0.22, 0.22, 0.64),
+    ]
+    drifting_stats = [
+        TokenUncertaintyStat("Paris", -0.2, 0.2, 0.7),
+        TokenUncertaintyStat("is", -0.15, 0.18, 0.68),
+        TokenUncertaintyStat("the", -0.12, 0.16, 0.69),
+        TokenUncertaintyStat("capital", -1.0, 0.95, 0.12),
+        TokenUncertaintyStat("of", -0.12, 0.16, 0.69),
+        TokenUncertaintyStat("Germany", -1.2, 1.05, 0.08),
+    ]
+
+    coherent = extract_specialist_features(
+        prompt="What is the capital of France?",
+        response="Paris is the capital of France.",
+        token_stats=coherent_stats,
+        internal_signal=None,
+    )
+    drifting = extract_specialist_features(
+        prompt="What is the capital of France?",
+        response="Paris is the capital of Germany.",
+        token_stats=drifting_stats,
+        internal_signal=None,
+    )
+
+    assert "specialist_consistency_segment_disagreement" in coherent
+    assert "specialist_consistency_prompt_alignment" in coherent
+    assert "specialist_consistency_prompt_drift" in coherent
+    assert drifting["specialist_consistency_segment_disagreement"] > coherent["specialist_consistency_segment_disagreement"]
+    assert drifting["specialist_consistency_prompt_drift"] > coherent["specialist_consistency_prompt_drift"]

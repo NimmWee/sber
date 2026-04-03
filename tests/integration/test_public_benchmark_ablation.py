@@ -85,6 +85,7 @@ def test_run_public_benchmark_ablation_writes_summary(tmp_path) -> None:
     assert "baseline_plus_numeric_specialist" in summary["variants"]
     assert "baseline_plus_entity_specialist" in summary["variants"]
     assert "baseline_plus_long_specialist" in summary["variants"]
+    assert "baseline_plus_consistency_specialist" in summary["variants"]
     assert "baseline_plus_all_specialists" in summary["variants"]
     assert "fused_specialist_ensemble" in summary["variants"]
     assert "precision" in summary["variants"]["fused_specialist_ensemble"]
@@ -100,6 +101,8 @@ def test_run_public_benchmark_ablation_writes_summary(tmp_path) -> None:
         summary["variants"]["baseline_plus_all_specialists"]["feature_count_after"]
         < summary["variants"]["baseline_plus_all_specialists"]["feature_count_before"]
     )
+    assert "consistency_specialist_score" in summary["variants"]["baseline_plus_consistency_specialist"]["score_components_mean"]
+    assert "score_label_correlation" in summary["variants"]["baseline_plus_consistency_specialist"]
     assert "best_variant" in summary
     assert Path(summary["artifact_path"]).exists()
 

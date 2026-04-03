@@ -33,6 +33,13 @@ LONG_CORE_FEATURES = (
     "specialist_long_max_suspicious_segment_score",
     "specialist_long_longest_suspicious_run",
 )
+CONSISTENCY_CORE_FEATURES = (
+    "specialist_consistency_segment_disagreement",
+    "specialist_consistency_segment_range",
+    "specialist_consistency_prompt_alignment",
+    "specialist_consistency_prompt_drift",
+    "specialist_consistency_local_conflict_rate",
+)
 SHARED_SPECIALIST_HINT_FEATURES = (
     "specialist_internal_disagreement_hint",
     "specialist_internal_consistency_hint",
@@ -59,6 +66,8 @@ def extract_specialist_features(
     sliding_margin_scores = _sliding_window_scores(margins)
     global_entropy_mean = _mean(entropies)
     global_margin_mean = _mean(margins)
+    segment_suspicion_scores = _segment_suspicion_scores(entropies, margins)
+    segment_prompt_alignment_scores = _segment_prompt_alignment_scores(prompt, tokens)
 
     return {
         "specialist_numeric_density": len(numeric_indices) / token_count,
@@ -119,6 +128,15 @@ def extract_specialist_features(
         "specialist_long_sliding_margin_min": min(sliding_margin_scores) if sliding_margin_scores else 0.0,
         "specialist_long_local_anomaly_peak": _local_anomaly_peak(entropies, margins),
         "specialist_long_inconsistent_span": float(_longest_local_anomaly_run(entropies, margins)),
+        "specialist_consistency_segment_disagreement": _variance(segment_suspicion_scores),
+        "specialist_consistency_segment_range": (
+            max(segment_suspicion_scores) - min(segment_suspicion_scores)
+            if segment_suspicion_scores
+            else 0.0
+        ),
+        "specialist_consistency_prompt_alignment": _mean(segment_prompt_alignment_scores),
+        "specialist_consistency_prompt_drift": _prompt_alignment_drift(segment_prompt_alignment_scores),
+        "specialist_consistency_local_conflict_rate": _local_conflict_rate(entropies, margins),
         "specialist_internal_disagreement_hint": float(internal_signal.layer_disagreement_mean) if internal_signal else 0.0,
         "specialist_internal_consistency_hint": float(internal_signal.early_late_layer_consistency) if internal_signal else 0.0,
         "specialist_local_uncertainty_spike": _local_uncertainty_spike(entropies, global_entropy_mean),
@@ -225,25 +243,33 @@ def build_all_specialist_blend(
     numeric_scores: list[float],
     entity_scores: list[float],
     long_scores: list[float],
+    consistency_scores: list[float] | None = None,
 ) -> list[float]:
     blended: list[float] = []
-    for baseline_score, numeric_score, entity_score, long_score in zip(
+    consistency_iterable = consistency_scores or [0.0] * len(baseline_scores)
+    for baseline_score, numeric_score, entity_score, long_score, consistency_score in zip(
         baseline_scores,
         numeric_scores,
         entity_scores,
         long_scores,
+        consistency_iterable,
     ):
         blended.append(
-            (0.55 * baseline_score)
-            + (0.15 * numeric_score)
-            + (0.15 * entity_score)
-            + (0.15 * long_score)
+            (0.52 * baseline_score)
+            + (0.12 * numeric_score)
+            + (0.12 * entity_score)
+            + (0.12 * long_score)
+            + (0.12 * consistency_score)
         )
     return blended
 
 
 def _normalize_token(token: str) -> str:
     return token.strip("Ġ▁ ,.;:!?()[]{}\"'")
+
+
+def _normalize_text_token(token: str) -> str:
+    return _normalize_token(token).lower()
 
 
 def _mean(values: list[float]) -> float:
@@ -359,6 +385,68 @@ def _max_suspicious_segment_score(entropies: list[float], margins: list[float]) 
         if segment_entropies and segment_margins:
             scores.append(_mean(segment_entropies) - _mean(segment_margins))
     return max(scores) if scores else 0.0
+
+
+def _segment_suspicion_scores(entropies: list[float], margins: list[float]) -> list[float]:
+    if not entropies or not margins:
+        return []
+    segment_size = max(1, len(entropies) // 3)
+    scores = []
+    for segment_index in range(3):
+        start = segment_index * segment_size
+        end = len(entropies) if segment_index == 2 else min(len(entropies), start + segment_size)
+        segment_entropies = entropies[start:end]
+        segment_margins = margins[start:end]
+        if segment_entropies and segment_margins:
+            scores.append(_mean(segment_entropies) - _mean(segment_margins))
+    return scores
+
+
+def _segment_prompt_alignment_scores(prompt: str, response_tokens: list[str]) -> list[float]:
+    if not response_tokens:
+        return []
+    prompt_terms = {
+        normalized
+        for normalized in (_normalize_text_token(token) for token in prompt.split())
+        if normalized and len(normalized) >= 3
+    }
+    if not prompt_terms:
+        return []
+    segment_size = max(1, len(response_tokens) // 3)
+    scores = []
+    for segment_index in range(3):
+        start = segment_index * segment_size
+        end = len(response_tokens) if segment_index == 2 else min(len(response_tokens), start + segment_size)
+        segment_tokens = [
+            normalized
+            for normalized in (_normalize_text_token(token) for token in response_tokens[start:end])
+            if normalized
+        ]
+        if not segment_tokens:
+            continue
+        overlap_count = sum(1 for token in segment_tokens if token in prompt_terms)
+        scores.append(overlap_count / len(segment_tokens))
+    return scores
+
+
+def _prompt_alignment_drift(alignment_scores: list[float]) -> float:
+    if len(alignment_scores) < 2:
+        return 0.0
+    return max(alignment_scores) - alignment_scores[-1]
+
+
+def _local_conflict_rate(entropies: list[float], margins: list[float]) -> float:
+    if len(entropies) < 2 or len(margins) < 2:
+        return 0.0
+    conflicts = 0
+    total = 0
+    for left_index in range(len(entropies) - 1):
+        entropy_jump = abs(entropies[left_index + 1] - entropies[left_index])
+        margin_jump = abs(margins[left_index + 1] - margins[left_index])
+        total += 1
+        if entropy_jump + margin_jump >= 0.6:
+            conflicts += 1
+    return conflicts / total if total else 0.0
 
 
 def _sliding_window_scores(values: list[float], window_size: int = 3) -> list[float]:
