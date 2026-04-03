@@ -33,6 +33,8 @@ def test_build_text_training_dataset_script_prints_summary(monkeypatch, tmp_path
                     "hallucination_count": 10,
                     "non_hallucination_count": 14,
                     "source_name_distribution": {"seed_a": 10, "seed_b": 14},
+                    "hallucination_bucket_coverage": {"numbers": 8, "entity_like_tokens": 6},
+                    "difficulty_heuristics": {"small_numeric_delta_hallucination_count": 4},
                     "warnings": ["long-response coverage is too low"],
                 },
                 "train_examples": [],
@@ -54,6 +56,8 @@ def test_build_text_training_dataset_script_prints_summary(monkeypatch, tmp_path
     assert "hallucination_count=10" in output
     assert "non_hallucination_count=14" in output
     assert "source_count=2" in output
+    assert "hallucination_bucket_coverage=" in output
+    assert "difficulty_heuristics=" in output
     assert "warnings=long-response coverage is too low" in output
     assert "artifact=" in output
 

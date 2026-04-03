@@ -100,6 +100,8 @@ def test_build_textual_training_dataset_reports_bucket_and_leakage_diagnostics(t
     assert "bucket_label_counts" in summary
     assert summary["bucket_label_counts"]["numbers"]["hallucination_count"] >= 1
     assert summary["corruption_taxonomy"]["number_nearby"] >= 1
+    assert "difficulty_heuristics" in summary
+    assert "hallucination_bucket_coverage" in summary
     assert "leakage_checks" in summary
     assert summary["leakage_checks"]["public_exact_example_overlap_count"] >= 1
     assert any("source" in warning or "public benchmark" in warning for warning in summary["warnings"])
@@ -131,6 +133,36 @@ def test_build_textual_training_dataset_generates_diverse_correct_and_hallucinat
     assert "long_correct_variant" in generation_methods
     assert "nearby_number_corruption" in generation_methods or "nearby_year_corruption" in generation_methods
     assert {"number_nearby", "entity_swap"} & corruption_types
+
+
+def test_build_textual_training_dataset_tracks_subtle_hallucination_difficulty(
+    tmp_path,
+) -> None:
+    seed_path = tmp_path / "public_seed_facts.jsonl"
+    _write_seed_facts(seed_path)
+
+    dataset = build_textual_training_dataset(
+        seed_path=seed_path,
+        public_eval_examples=[],
+    )
+
+    difficulty = dataset.summary["difficulty_heuristics"]
+    assert difficulty["small_numeric_delta_hallucination_count"] >= 1
+    assert difficulty["same_type_entity_swap_count"] >= 1
+    assert difficulty["long_local_corruption_count"] >= 0
+
+
+def test_default_public_seed_corpus_has_stronger_risky_bucket_hallucination_coverage() -> None:
+    dataset = build_textual_training_dataset(
+        seed_path=PROJECT_ROOT / "data" / "public_seed_facts.jsonl",
+        public_eval_examples=[],
+    )
+
+    hallucination_coverage = dataset.summary["hallucination_bucket_coverage"]
+
+    assert hallucination_coverage["numbers"] >= 40
+    assert hallucination_coverage["entity_like_tokens"] >= 30
+    assert hallucination_coverage["long_responses"] >= 20
 
 
 def test_export_and_load_textual_training_dataset_roundtrip(tmp_path) -> None:

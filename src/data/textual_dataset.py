@@ -111,6 +111,12 @@ def build_textual_training_dataset(
     source_name_distribution: dict[str, int] = {}
     generation_distribution: dict[str, int] = {}
     corruption_taxonomy: dict[str, int] = {}
+    difficulty_heuristics = {
+        "small_numeric_delta_hallucination_count": 0,
+        "small_year_delta_hallucination_count": 0,
+        "same_type_entity_swap_count": 0,
+        "long_local_corruption_count": 0,
+    }
     bucket_label_counts = {
         "numbers": {"non_hallucination_count": 0, "hallucination_count": 0},
         "entity_like_tokens": {"non_hallucination_count": 0, "hallucination_count": 0},
@@ -152,7 +158,7 @@ def build_textual_training_dataset(
                         bucket_label_counts=bucket_label_counts,
                     )
                     example_index += 1
-            for response_variant, corruption_type, generation_method in hallucinated_variants:
+            for response_variant, corruption_type, generation_method, variant_metadata in hallucinated_variants:
                 example = _build_textual_example(
                     prompt=prompt_variant,
                     response=response_variant,
@@ -165,6 +171,7 @@ def build_textual_training_dataset(
                     corruption_type=corruption_type,
                     seed_index=seed_index,
                     seed_metadata=seed.metadata,
+                    variant_metadata=variant_metadata,
                 )
                 if _is_too_trivial(seed.answer, response_variant):
                     trivial_examples.append(
@@ -185,6 +192,7 @@ def build_textual_training_dataset(
                         generation_distribution=generation_distribution,
                         corruption_taxonomy=corruption_taxonomy,
                         bucket_label_counts=bucket_label_counts,
+                        difficulty_heuristics=difficulty_heuristics,
                     )
                     example_index += 1
 
@@ -195,6 +203,7 @@ def build_textual_training_dataset(
         generation_distribution=generation_distribution,
         corruption_taxonomy=corruption_taxonomy,
         bucket_label_counts=bucket_label_counts,
+        difficulty_heuristics=difficulty_heuristics,
         trivial_examples=trivial_examples,
         public_eval_examples=public_eval_examples or [],
     )
@@ -258,10 +267,12 @@ def _build_textual_example(
     corruption_type: str | None,
     seed_index: int,
     seed_metadata: dict[str, object],
+    variant_metadata: dict[str, object] | None = None,
 ) -> TextualTrainingExample:
     metadata = {
         "seed_index": seed_index,
         **dict(seed_metadata),
+        **dict(variant_metadata or {}),
         "bucket_flags": _bucket_flags(response),
     }
     return TextualTrainingExample(
@@ -289,6 +300,7 @@ def _append_dataset_example(
     generation_distribution: dict[str, int],
     corruption_taxonomy: dict[str, int],
     bucket_label_counts: dict[str, dict[str, int]],
+    difficulty_heuristics: dict[str, int] | None = None,
 ) -> None:
     all_examples.append(example)
     if example.split == "dev":
@@ -308,6 +320,15 @@ def _append_dataset_example(
         corruption_taxonomy[example.corruption_type] = (
             corruption_taxonomy.get(example.corruption_type, 0) + 1
         )
+        if difficulty_heuristics is not None:
+            if example.metadata.get("small_numeric_delta"):
+                difficulty_heuristics["small_numeric_delta_hallucination_count"] += 1
+            if example.metadata.get("small_year_delta"):
+                difficulty_heuristics["small_year_delta_hallucination_count"] += 1
+            if example.metadata.get("same_type_swap"):
+                difficulty_heuristics["same_type_entity_swap_count"] += 1
+            if example.metadata.get("long_local_corruption"):
+                difficulty_heuristics["long_local_corruption_count"] += 1
     for bucket_name, is_present in example.metadata["bucket_flags"].items():
         if bucket_name not in bucket_label_counts or not is_present:
             continue
@@ -323,6 +344,7 @@ def _build_dataset_summary(
     generation_distribution: dict[str, int],
     corruption_taxonomy: dict[str, int],
     bucket_label_counts: dict[str, dict[str, int]],
+    difficulty_heuristics: dict[str, int],
     trivial_examples: list[dict[str, object]],
     public_eval_examples: list[RawLabeledExample],
 ) -> dict[str, object]:
@@ -336,6 +358,10 @@ def _build_dataset_summary(
     }
     bucket_label_ratios = {
         bucket_name: _bucket_label_ratio(counts)
+        for bucket_name, counts in bucket_label_counts.items()
+    }
+    hallucination_bucket_coverage = {
+        bucket_name: counts["hallucination_count"]
         for bucket_name, counts in bucket_label_counts.items()
     }
     warnings = _dataset_warnings(
@@ -361,8 +387,10 @@ def _build_dataset_summary(
         "generation_method_distribution": generation_distribution,
         "corruption_taxonomy": corruption_taxonomy,
         "bucket_coverage": bucket_coverage,
+        "hallucination_bucket_coverage": hallucination_bucket_coverage,
         "bucket_label_counts": bucket_label_counts,
         "bucket_label_ratios": bucket_label_ratios,
+        "difficulty_heuristics": difficulty_heuristics,
         "duplicate_count": duplicate_diagnostics["duplicate_count"],
         "near_duplicate_count": duplicate_diagnostics["near_duplicate_count"],
         "too_trivial_or_unrealistic_count": len(trivial_examples),
@@ -400,47 +428,128 @@ def _build_correct_variants(seed: PublicSeedRecord) -> list[tuple[str, str]]:
 
 def _build_hallucinated_variants(
     seed: PublicSeedRecord,
-) -> list[tuple[str, str, str]]:
+) -> list[tuple[str, str, str, dict[str, object]]]:
     answer = seed.answer
-    variants: list[tuple[str, str, str]] = []
+    variants: list[tuple[str, str, str, dict[str, object]]] = []
 
     corrupted_year = _replace_year(answer)
     if corrupted_year is not None:
-        variants.append((corrupted_year, "date_nearby", "nearby_year_corruption"))
+        variants.append(
+            (
+                corrupted_year,
+                "date_nearby",
+                "nearby_year_corruption",
+                {"small_year_delta": True, "difficulty_band": "subtle"},
+            )
+        )
+        alternate_year = _replace_year(answer, delta=1)
+        if alternate_year is not None:
+            variants.append(
+                (
+                    alternate_year,
+                    "date_nearby",
+                    "nearby_year_plus_one_corruption",
+                    {"small_year_delta": True, "difficulty_band": "subtle"},
+                )
+            )
 
     corrupted_number = _replace_number(answer)
     if corrupted_number is not None:
-        variants.append((corrupted_number, "number_nearby", "nearby_number_corruption"))
+        variants.append(
+            (
+                corrupted_number,
+                "number_nearby",
+                "nearby_number_corruption",
+                {"small_numeric_delta": True, "difficulty_band": "subtle"},
+            )
+        )
+        alternate_number = _replace_number(answer, delta=1)
+        if alternate_number is not None:
+            variants.append(
+                (
+                    alternate_number,
+                    "number_nearby",
+                    "nearby_number_plus_one_corruption",
+                    {"small_numeric_delta": True, "difficulty_band": "subtle"},
+                )
+            )
 
     corrupted_person = _replace_from_lookup(answer, PERSON_SWAPS)
     if corrupted_person is not None:
-        variants.append((corrupted_person, "entity_swap", "same_type_entity_swap"))
+        variants.append(
+            (
+                corrupted_person,
+                "entity_swap",
+                "same_type_entity_swap",
+                {"same_type_swap": True, "difficulty_band": "subtle"},
+            )
+        )
 
     corrupted_place = _replace_from_lookup(answer, PLACE_SWAPS)
     if corrupted_place is not None:
-        variants.append((corrupted_place, "place_swap", "same_type_place_swap"))
+        variants.append(
+            (
+                corrupted_place,
+                "place_swap",
+                "same_type_place_swap",
+                {"same_type_swap": True, "difficulty_band": "subtle"},
+            )
+        )
 
     corrupted_org = _replace_from_lookup(answer, ORGANIZATION_SWAPS)
     if corrupted_org is not None:
-        variants.append((corrupted_org, "organization_or_title_swap", "organization_title_swap"))
+        variants.append(
+            (
+                corrupted_org,
+                "organization_or_title_swap",
+                "organization_title_swap",
+                {"same_type_swap": True, "difficulty_band": "subtle"},
+            )
+        )
 
-    if len(answer.split()) >= 16:
+    if len(answer.split()) >= 14:
         local_corruption = _local_long_corruption(answer)
         if local_corruption is not None:
-            variants.append((local_corruption, "local_fact_corruption", "long_local_corruption"))
+            variants.append(
+                (
+                    local_corruption,
+                    "local_fact_corruption",
+                    "long_local_corruption",
+                    {"long_local_corruption": True, "difficulty_band": "subtle"},
+                )
+            )
         secondary_long_corruption = _secondary_long_corruption(answer)
         if secondary_long_corruption is not None:
             variants.append(
-                (secondary_long_corruption, "local_fact_corruption", "long_secondary_local_corruption")
+                (
+                    secondary_long_corruption,
+                    "local_fact_corruption",
+                    "long_secondary_local_corruption",
+                    {"long_local_corruption": True, "difficulty_band": "subtle"},
+                )
             )
     else:
         confident_short = _confident_short_corruption(answer)
         if confident_short is not None:
-            variants.append((confident_short, "short_confident_wrong", "short_confident_corruption"))
+            variants.append(
+                (
+                    confident_short,
+                    "short_confident_wrong",
+                    "short_confident_corruption",
+                    {"difficulty_band": "subtle"},
+                )
+            )
 
     if not variants:
         fallback = f"{answer} This also claims an unsupported extra fact."
-        variants.append((fallback, "unsupported_local_addition", "fallback_local_corruption"))
+        variants.append(
+            (
+                fallback,
+                "unsupported_local_addition",
+                "fallback_local_corruption",
+                {"difficulty_band": "medium"},
+            )
+        )
     return _dedupe_hallucinated_rows(variants)
 
 
@@ -470,16 +579,16 @@ def _entity_dense_variant(answer: str) -> str | None:
     return f"Historically and factually, {answer}"
 
 
-def _replace_year(answer: str) -> str | None:
+def _replace_year(answer: str, delta: int = 2) -> str | None:
     match = YEAR_PATTERN.search(answer)
     if match is None:
         return None
     year = int(match.group(0))
-    replacement = str(year + 2 if year < 2024 else year - 2)
+    replacement = str(year + delta if year < 2024 else year - delta)
     return answer[: match.start()] + replacement + answer[match.end() :]
 
 
-def _replace_number(answer: str) -> str | None:
+def _replace_number(answer: str, delta: float = 2.0) -> str | None:
     match = NUMBER_PATTERN.search(answer)
     if match is None:
         return None
@@ -487,7 +596,7 @@ def _replace_number(answer: str) -> str | None:
     if YEAR_PATTERN.fullmatch(value):
         return None
     number = float(value)
-    replacement = str(int(number + 2)) if number.is_integer() else f"{number + 0.5:.1f}"
+    replacement = str(int(number + delta)) if number.is_integer() else f"{number + (delta / 2):.1f}"
     return answer[: match.start()] + replacement + answer[match.end() :]
 
 
@@ -502,11 +611,33 @@ def _local_long_corruption(answer: str) -> str | None:
     sentences = [segment.strip() for segment in re.split(r"(?<=[.!?])\s+", answer) if segment.strip()]
     if not sentences:
         return None
-    first_sentence = sentences[0]
-    corrupted = _replace_year(first_sentence) or _replace_number(first_sentence) or _replace_from_lookup(first_sentence, PERSON_SWAPS) or _replace_from_lookup(first_sentence, PLACE_SWAPS) or _replace_from_lookup(first_sentence, ORGANIZATION_SWAPS)
-    if corrupted is None:
-        corrupted = f"{first_sentence} It also incorrectly attributes one key fact."
-    sentences[0] = corrupted
+    sentence_index = len(sentences) - 1
+    target_sentence = sentences[sentence_index]
+    clause_split = [segment.strip() for segment in target_sentence.split(",") if segment.strip()]
+    if len(clause_split) >= 2:
+        clause_index = len(clause_split) - 1
+        corrupted_clause = (
+            _replace_year(clause_split[clause_index], delta=1)
+            or _replace_number(clause_split[clause_index], delta=1.0)
+            or _replace_from_lookup(clause_split[clause_index], PERSON_SWAPS)
+            or _replace_from_lookup(clause_split[clause_index], PLACE_SWAPS)
+            or _replace_from_lookup(clause_split[clause_index], ORGANIZATION_SWAPS)
+        )
+        if corrupted_clause is not None and corrupted_clause != clause_split[clause_index]:
+            clause_split[clause_index] = corrupted_clause
+            sentences[sentence_index] = ", ".join(clause_split)
+            return " ".join(sentences)
+
+    corrupted_sentence = (
+        _replace_year(target_sentence, delta=1)
+        or _replace_number(target_sentence, delta=1.0)
+        or _replace_from_lookup(target_sentence, PERSON_SWAPS)
+        or _replace_from_lookup(target_sentence, PLACE_SWAPS)
+        or _replace_from_lookup(target_sentence, ORGANIZATION_SWAPS)
+    )
+    if corrupted_sentence is None or corrupted_sentence == target_sentence:
+        return None
+    sentences[sentence_index] = corrupted_sentence
     return " ".join(sentences)
 
 
@@ -514,7 +645,7 @@ def _confident_short_corruption(answer: str) -> str | None:
     corrupted = _replace_year(answer) or _replace_number(answer) or _replace_from_lookup(answer, PERSON_SWAPS) or _replace_from_lookup(answer, PLACE_SWAPS) or _replace_from_lookup(answer, ORGANIZATION_SWAPS)
     if corrupted is None:
         return None
-    return f"The correct answer is definitely: {corrupted}"
+    return f"A concise answer is: {corrupted}"
 
 
 def _secondary_long_corruption(answer: str) -> str | None:
@@ -536,15 +667,17 @@ def _dedupe_variant_rows(rows: list[tuple[str, str, str]]) -> list[tuple[str, st
     return deduped
 
 
-def _dedupe_hallucinated_rows(rows: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
+def _dedupe_hallucinated_rows(
+    rows: list[tuple[str, str, str, dict[str, object]]]
+) -> list[tuple[str, str, str, dict[str, object]]]:
     seen: set[str] = set()
-    deduped: list[tuple[str, str, str]] = []
-    for response, corruption_type, generation_method in rows:
+    deduped: list[tuple[str, str, str, dict[str, object]]] = []
+    for response, corruption_type, generation_method, metadata in rows:
         normalized = " ".join(response.split())
         if normalized in seen:
             continue
         seen.add(normalized)
-        deduped.append((normalized, corruption_type, generation_method))
+        deduped.append((normalized, corruption_type, generation_method, metadata))
     return deduped
 
 
@@ -597,7 +730,7 @@ def _bucket_flags(text: str) -> dict[str, bool]:
         "numbers": bool(NUMBER_PATTERN.search(text) or YEAR_PATTERN.search(text)),
         "entity_like_tokens": len(TITLECASE_PATTERN.findall(text)) >= 2,
         "places": PLACE_PREPOSITION_PATTERN.search(text) is not None,
-        "long_responses": token_count > 24,
+        "long_responses": token_count > 18,
     }
 
 

@@ -46,6 +46,14 @@ def main() -> None:
     print(f"hallucination_count={dataset.summary['hallucination_count']}")
     print(f"non_hallucination_count={dataset.summary['non_hallucination_count']}")
     print(f"source_count={len(dataset.summary.get('source_name_distribution', {}))}")
+    print(
+        "hallucination_bucket_coverage="
+        f"{dataset.summary.get('hallucination_bucket_coverage', {})}"
+    )
+    print(
+        "difficulty_heuristics="
+        f"{dataset.summary.get('difficulty_heuristics', {})}"
+    )
     print(f"warnings={'; '.join(dataset.summary.get('warnings', []))}")
     print(f"artifact={artifact_path}")
 
