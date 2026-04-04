@@ -86,6 +86,7 @@ def test_run_public_benchmark_ablation_writes_summary(tmp_path) -> None:
     assert "baseline_plus_entity_specialist" in summary["variants"]
     assert "baseline_plus_long_specialist" in summary["variants"]
     assert "baseline_plus_consistency_specialist" in summary["variants"]
+    assert "baseline_plus_stability_specialist" in summary["variants"]
     assert "baseline_plus_all_specialists" in summary["variants"]
     assert "fused_specialist_ensemble" in summary["variants"]
     assert "precision" in summary["variants"]["fused_specialist_ensemble"]
@@ -128,6 +129,6 @@ def test_run_public_benchmark_ablation_reuses_cached_model_signals(tmp_path) -> 
         artifact_dir=tmp_path / "artifacts",
     )
 
-    assert provider.collect_signals_calls == 4
+    assert provider.collect_signals_calls == 8
     assert Path(summary["cached_signal_artifact_path"]).exists()
     assert summary["estimated_signal_runtime_improvement_ms"] >= 0.0

@@ -40,6 +40,12 @@ CONSISTENCY_CORE_FEATURES = (
     "specialist_consistency_prompt_drift",
     "specialist_consistency_local_conflict_rate",
 )
+STABILITY_CORE_FEATURES = (
+    "specialist_stability_logprob_shift",
+    "specialist_stability_entropy_shift",
+    "specialist_stability_margin_shift",
+    "specialist_stability_instability_rate",
+)
 SHARED_SPECIALIST_HINT_FEATURES = (
     "specialist_internal_disagreement_hint",
     "specialist_internal_consistency_hint",
@@ -52,6 +58,8 @@ def extract_specialist_features(
     response: str,
     token_stats: list[TokenUncertaintyStat] | None,
     internal_signal: InternalModelSignal | None,
+    perturbed_token_stats: list[TokenUncertaintyStat] | None = None,
+    perturbed_internal_signal: InternalModelSignal | None = None,
 ) -> dict[str, float]:
     stats = token_stats or []
     tokens = [stat.token for stat in stats]
@@ -68,6 +76,10 @@ def extract_specialist_features(
     global_margin_mean = _mean(margins)
     segment_suspicion_scores = _segment_suspicion_scores(entropies, margins)
     segment_prompt_alignment_scores = _segment_prompt_alignment_scores(prompt, tokens)
+    perturbed_stats = perturbed_token_stats or []
+    perturbed_logprobs = [float(stat.logprob) for stat in perturbed_stats]
+    perturbed_entropies = [float(stat.entropy) for stat in perturbed_stats]
+    perturbed_margins = [float(stat.top1_top2_margin) for stat in perturbed_stats]
 
     return {
         "specialist_numeric_density": len(numeric_indices) / token_count,
@@ -137,6 +149,19 @@ def extract_specialist_features(
         "specialist_consistency_prompt_alignment": _mean(segment_prompt_alignment_scores),
         "specialist_consistency_prompt_drift": _prompt_alignment_drift(segment_prompt_alignment_scores),
         "specialist_consistency_local_conflict_rate": _local_conflict_rate(entropies, margins),
+        "specialist_stability_logprob_shift": abs(_mean(logprobs) - _mean(perturbed_logprobs)),
+        "specialist_stability_entropy_shift": abs(_mean(entropies) - _mean(perturbed_entropies)),
+        "specialist_stability_margin_shift": abs(_mean(margins) - _mean(perturbed_margins)),
+        "specialist_stability_instability_rate": _pairwise_instability_rate(
+            logprobs=logprobs,
+            perturbed_logprobs=perturbed_logprobs,
+            entropies=entropies,
+            perturbed_entropies=perturbed_entropies,
+            margins=margins,
+            perturbed_margins=perturbed_margins,
+            internal_signal=internal_signal,
+            perturbed_internal_signal=perturbed_internal_signal,
+        ),
         "specialist_internal_disagreement_hint": float(internal_signal.layer_disagreement_mean) if internal_signal else 0.0,
         "specialist_internal_consistency_hint": float(internal_signal.early_late_layer_consistency) if internal_signal else 0.0,
         "specialist_local_uncertainty_spike": _local_uncertainty_spike(entropies, global_entropy_mean),
@@ -244,24 +269,40 @@ def build_all_specialist_blend(
     entity_scores: list[float],
     long_scores: list[float],
     consistency_scores: list[float] | None = None,
+    stability_scores: list[float] | None = None,
 ) -> list[float]:
     blended: list[float] = []
     consistency_iterable = consistency_scores or [0.0] * len(baseline_scores)
-    for baseline_score, numeric_score, entity_score, long_score, consistency_score in zip(
+    stability_iterable = stability_scores or [0.0] * len(baseline_scores)
+    for baseline_score, numeric_score, entity_score, long_score, consistency_score, stability_score in zip(
         baseline_scores,
         numeric_scores,
         entity_scores,
         long_scores,
         consistency_iterable,
+        stability_iterable,
     ):
         blended.append(
-            (0.52 * baseline_score)
-            + (0.12 * numeric_score)
-            + (0.12 * entity_score)
-            + (0.12 * long_score)
-            + (0.12 * consistency_score)
+            (0.48 * baseline_score)
+            + (0.11 * numeric_score)
+            + (0.11 * entity_score)
+            + (0.11 * long_score)
+            + (0.10 * consistency_score)
+            + (0.09 * stability_score)
         )
     return blended
+
+
+def build_stability_specialist_blend(
+    *,
+    baseline_scores: list[float],
+    stability_scores: list[float],
+    blend_weight: float = 0.2,
+) -> list[float]:
+    return [
+        ((1.0 - blend_weight) * baseline_score) + (blend_weight * stability_score)
+        for baseline_score, stability_score in zip(baseline_scores, stability_scores)
+    ]
 
 
 def _normalize_token(token: str) -> str:
@@ -447,6 +488,46 @@ def _local_conflict_rate(entropies: list[float], margins: list[float]) -> float:
         if entropy_jump + margin_jump >= 0.6:
             conflicts += 1
     return conflicts / total if total else 0.0
+
+
+def _pairwise_instability_rate(
+    *,
+    logprobs: list[float],
+    perturbed_logprobs: list[float],
+    entropies: list[float],
+    perturbed_entropies: list[float],
+    margins: list[float],
+    perturbed_margins: list[float],
+    internal_signal: InternalModelSignal | None,
+    perturbed_internal_signal: InternalModelSignal | None,
+) -> float:
+    shared_length = min(
+        len(logprobs),
+        len(perturbed_logprobs),
+        len(entropies),
+        len(perturbed_entropies),
+        len(margins),
+        len(perturbed_margins),
+    )
+    if shared_length <= 0:
+        return 0.0
+    unstable_positions = 0
+    for index in range(shared_length):
+        shift = (
+            abs(logprobs[index] - perturbed_logprobs[index])
+            + abs(entropies[index] - perturbed_entropies[index])
+            + abs(margins[index] - perturbed_margins[index])
+        )
+        if shift >= 0.6:
+            unstable_positions += 1
+    instability_rate = unstable_positions / shared_length
+    internal_shift = 0.0
+    if internal_signal is not None and perturbed_internal_signal is not None:
+        internal_shift = abs(
+            float(internal_signal.layer_disagreement_mean)
+            - float(perturbed_internal_signal.layer_disagreement_mean)
+        )
+    return instability_rate + internal_shift
 
 
 def _sliding_window_scores(values: list[float], window_size: int = 3) -> list[float]:

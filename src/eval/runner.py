@@ -46,6 +46,8 @@ class RawLabeledExample:
     label: int
     token_stats: list[TokenUncertaintyStat] | None = None
     internal_signal: InternalModelSignal | None = None
+    perturbed_token_stats: list[TokenUncertaintyStat] | None = None
+    perturbed_internal_signal: InternalModelSignal | None = None
 
 
 class RawExampleEvaluationDataset:

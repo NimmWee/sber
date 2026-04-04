@@ -15,8 +15,10 @@ from eval.specialist_ensemble import (
     ENTITY_CORE_FEATURES,
     LONG_CORE_FEATURES,
     NUMERIC_CORE_FEATURES,
+    STABILITY_CORE_FEATURES,
     build_all_specialist_blend,
     build_fusion_feature_row,
+    build_stability_specialist_blend,
     build_single_specialist_blend,
     extract_specialist_features,
     select_important_specialist_features,
@@ -428,6 +430,11 @@ def _cache_model_signals(
             prompt=example.prompt,
             response=example.response,
         )
+        perturbed_token_stats, perturbed_internal_signal = _collect_signals(
+            token_stat_provider=token_stat_provider,
+            prompt=_perturb_prompt(example.prompt),
+            response=example.response,
+        )
         cached_examples.append(
             RawLabeledExample(
                 prompt=example.prompt,
@@ -435,6 +442,8 @@ def _cache_model_signals(
                 label=example.label,
                 token_stats=token_stats,
                 internal_signal=internal_signal,
+                perturbed_token_stats=perturbed_token_stats,
+                perturbed_internal_signal=perturbed_internal_signal,
             )
         )
     return cached_examples
@@ -457,7 +466,28 @@ def _serialize_cached_example(example: RawLabeledExample) -> dict:
         "internal_signal": (
             asdict(example.internal_signal) if example.internal_signal is not None else None
         ),
+        "perturbed_token_stats": [
+            {
+                "token": stat.token,
+                "logprob": stat.logprob,
+                "entropy": stat.entropy,
+                "top1_top2_margin": stat.top1_top2_margin,
+            }
+            for stat in (example.perturbed_token_stats or [])
+        ],
+        "perturbed_internal_signal": (
+            asdict(example.perturbed_internal_signal)
+            if example.perturbed_internal_signal is not None
+            else None
+        ),
     }
+
+
+def _perturb_prompt(prompt: str) -> str:
+    stripped = prompt.strip()
+    if not stripped:
+        return prompt
+    return f"Briefly answer the same question: {stripped}"
 
 
 def _measure_variant_latency(
@@ -532,6 +562,10 @@ def _evaluate_specialist_ensemble_variants(
         specialist_rows=train_specialist_rows,
         prefix="specialist_consistency_",
     )
+    stability_train_full_rows = select_specialist_feature_subset(
+        specialist_rows=train_specialist_rows,
+        prefix="specialist_stability_",
+    )
     numeric_validation_full_rows = select_specialist_feature_subset(
         specialist_rows=validation_specialist_rows,
         prefix="specialist_numeric_",
@@ -548,11 +582,16 @@ def _evaluate_specialist_ensemble_variants(
         specialist_rows=validation_specialist_rows,
         prefix="specialist_consistency_",
     )
+    stability_validation_full_rows = select_specialist_feature_subset(
+        specialist_rows=validation_specialist_rows,
+        prefix="specialist_stability_",
+    )
 
     numeric_seed_head = train_lightgbm_head(numeric_train_full_rows, train_labels)
     entity_seed_head = train_lightgbm_head(entity_train_full_rows, train_labels)
     long_seed_head = train_lightgbm_head(long_train_full_rows, train_labels)
     consistency_seed_head = train_lightgbm_head(consistency_train_full_rows, train_labels)
+    stability_seed_head = train_lightgbm_head(stability_train_full_rows, train_labels)
 
     numeric_selected_feature_names = select_important_specialist_features(
         all_feature_names=list(numeric_train_full_rows[0].keys()) if numeric_train_full_rows else [],
@@ -573,6 +612,11 @@ def _evaluate_specialist_ensemble_variants(
         all_feature_names=list(consistency_train_full_rows[0].keys()) if consistency_train_full_rows else [],
         feature_importance=_lightgbm_feature_importance(consistency_seed_head, top_k=None),
         required_feature_names=[*CONSISTENCY_CORE_FEATURES],
+    )
+    stability_selected_feature_names = select_important_specialist_features(
+        all_feature_names=list(stability_train_full_rows[0].keys()) if stability_train_full_rows else [],
+        feature_importance=_lightgbm_feature_importance(stability_seed_head, top_k=None),
+        required_feature_names=[*STABILITY_CORE_FEATURES],
     )
 
     numeric_train_rows = select_specialist_feature_subset(
@@ -595,6 +639,11 @@ def _evaluate_specialist_ensemble_variants(
         prefix="specialist_consistency_",
         selected_feature_names=consistency_selected_feature_names,
     )
+    stability_train_rows = select_specialist_feature_subset(
+        specialist_rows=train_specialist_rows,
+        prefix="specialist_stability_",
+        selected_feature_names=stability_selected_feature_names,
+    )
     numeric_validation_rows = select_specialist_feature_subset(
         specialist_rows=validation_specialist_rows,
         prefix="specialist_numeric_",
@@ -615,21 +664,29 @@ def _evaluate_specialist_ensemble_variants(
         prefix="specialist_consistency_",
         selected_feature_names=consistency_selected_feature_names,
     )
+    stability_validation_rows = select_specialist_feature_subset(
+        specialist_rows=validation_specialist_rows,
+        prefix="specialist_stability_",
+        selected_feature_names=stability_selected_feature_names,
+    )
 
     numeric_head = train_lightgbm_head(numeric_train_rows, train_labels)
     entity_head = train_lightgbm_head(entity_train_rows, train_labels)
     long_head = train_lightgbm_head(long_train_rows, train_labels)
     consistency_head = train_lightgbm_head(consistency_train_rows, train_labels)
+    stability_head = train_lightgbm_head(stability_train_rows, train_labels)
 
     numeric_train_scores = numeric_head.predict_proba_batch(numeric_train_rows)
     entity_train_scores = entity_head.predict_proba_batch(entity_train_rows)
     long_train_scores = long_head.predict_proba_batch(long_train_rows)
     consistency_train_scores = consistency_head.predict_proba_batch(consistency_train_rows)
+    stability_train_scores = stability_head.predict_proba_batch(stability_train_rows)
 
     numeric_validation_scores = numeric_head.predict_proba_batch(numeric_validation_rows)
     entity_validation_scores = entity_head.predict_proba_batch(entity_validation_rows)
     long_validation_scores = long_head.predict_proba_batch(long_validation_rows)
     consistency_validation_scores = consistency_head.predict_proba_batch(consistency_validation_rows)
+    stability_validation_scores = stability_head.predict_proba_batch(stability_validation_rows)
 
     variants = {
         "baseline_plus_numeric_specialist": _evaluate_probability_variant(
@@ -716,6 +773,27 @@ def _evaluate_specialist_ensemble_variants(
             feature_count_before=len(consistency_train_full_rows[0]) if consistency_train_full_rows else 0,
             feature_count_after=len(consistency_selected_feature_names),
         ),
+        "baseline_plus_stability_specialist": _evaluate_probability_variant(
+            name="baseline_plus_stability_specialist",
+            probabilities=build_stability_specialist_blend(
+                baseline_scores=baseline_validation_scores,
+                stability_scores=stability_validation_scores,
+            ),
+            validation_examples=validation_examples,
+            latency_total_mean_ms=_measure_score_only_latency(
+                [baseline_validation_scores[0], stability_validation_scores[0]],
+                repeat_count=latency_repeat_count,
+            ),
+            artifact_dir=artifact_dir / "baseline_plus_stability_specialist",
+            score_components_mean={
+                "baseline_score": _mean(baseline_validation_scores),
+                "stability_specialist_score": _mean(stability_validation_scores),
+            },
+            feature_importance=_lightgbm_feature_importance(stability_head),
+            selected_feature_names=stability_selected_feature_names,
+            feature_count_before=len(stability_train_full_rows[0]) if stability_train_full_rows else 0,
+            feature_count_after=len(stability_selected_feature_names),
+        ),
         "baseline_plus_all_specialists": _evaluate_probability_variant(
             name="baseline_plus_all_specialists",
             probabilities=build_all_specialist_blend(
@@ -724,6 +802,7 @@ def _evaluate_specialist_ensemble_variants(
                 entity_scores=entity_validation_scores,
                 long_scores=long_validation_scores,
                 consistency_scores=consistency_validation_scores,
+                stability_scores=stability_validation_scores,
             ),
             validation_examples=validation_examples,
             latency_total_mean_ms=_measure_score_only_latency(
@@ -733,6 +812,7 @@ def _evaluate_specialist_ensemble_variants(
                     entity_validation_scores[0],
                     long_validation_scores[0],
                     consistency_validation_scores[0],
+                    stability_validation_scores[0],
                 ],
                 repeat_count=latency_repeat_count,
             ),
@@ -743,12 +823,14 @@ def _evaluate_specialist_ensemble_variants(
                 "entity_specialist_score": _mean(entity_validation_scores),
                 "long_specialist_score": _mean(long_validation_scores),
                 "consistency_specialist_score": _mean(consistency_validation_scores),
+                "stability_specialist_score": _mean(stability_validation_scores),
             },
             feature_importance=(
                 _lightgbm_feature_importance(numeric_head)[:3]
                 + _lightgbm_feature_importance(entity_head)[:3]
                 + _lightgbm_feature_importance(long_head)[:3]
                 + _lightgbm_feature_importance(consistency_head)[:3]
+                + _lightgbm_feature_importance(stability_head)[:3]
             ),
             selected_feature_names=sorted(
                 set(
@@ -756,6 +838,7 @@ def _evaluate_specialist_ensemble_variants(
                     + entity_selected_feature_names
                     + long_selected_feature_names
                     + consistency_selected_feature_names
+                    + stability_selected_feature_names
                 )
             ),
             feature_count_before=(
@@ -763,12 +846,14 @@ def _evaluate_specialist_ensemble_variants(
                 + (len(entity_train_full_rows[0]) if entity_train_full_rows else 0)
                 + (len(long_train_full_rows[0]) if long_train_full_rows else 0)
                 + (len(consistency_train_full_rows[0]) if consistency_train_full_rows else 0)
+                + (len(stability_train_full_rows[0]) if stability_train_full_rows else 0)
             ),
             feature_count_after=(
                 len(numeric_selected_feature_names)
                 + len(entity_selected_feature_names)
                 + len(long_selected_feature_names)
                 + len(consistency_selected_feature_names)
+                + len(stability_selected_feature_names)
             ),
         ),
     }
@@ -822,6 +907,8 @@ def _evaluate_specialist_ensemble_variants(
             "numeric_specialist_score": _mean(numeric_validation_scores),
             "entity_specialist_score": _mean(entity_validation_scores),
             "long_specialist_score": _mean(long_validation_scores),
+            "consistency_specialist_score": _mean(consistency_validation_scores),
+            "stability_specialist_score": _mean(stability_validation_scores),
         },
         feature_importance=_lightgbm_feature_importance(fusion_head),
         model=head_to_artifact(fusion_head),
@@ -853,6 +940,8 @@ def _prepare_default_and_specialist_rows(
                 response=example.response,
                 token_stats=example.token_stats,
                 internal_signal=example.internal_signal,
+                perturbed_token_stats=example.perturbed_token_stats,
+                perturbed_internal_signal=example.perturbed_internal_signal,
             )
         )
         labels.append(example.label)

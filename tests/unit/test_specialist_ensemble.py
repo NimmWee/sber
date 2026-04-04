@@ -202,3 +202,37 @@ def test_extract_specialist_features_adds_consistency_signals_for_segment_drift(
     assert "specialist_consistency_prompt_drift" in coherent
     assert drifting["specialist_consistency_segment_disagreement"] > coherent["specialist_consistency_segment_disagreement"]
     assert drifting["specialist_consistency_prompt_drift"] > coherent["specialist_consistency_prompt_drift"]
+
+
+def test_extract_specialist_features_adds_prompt_stability_signals_from_perturbed_pass() -> None:
+    original_stats = [
+        TokenUncertaintyStat("Paris", -0.2, 0.2, 0.7),
+        TokenUncertaintyStat("France", -0.22, 0.22, 0.64),
+    ]
+    perturbed_stats = [
+        TokenUncertaintyStat("Paris", -0.9, 0.85, 0.12),
+        TokenUncertaintyStat("France", -0.95, 0.88, 0.1),
+    ]
+
+    stable = extract_specialist_features(
+        prompt="What is the capital of France?",
+        response="Paris, France.",
+        token_stats=original_stats,
+        internal_signal=None,
+        perturbed_token_stats=original_stats,
+        perturbed_internal_signal=None,
+    )
+    unstable = extract_specialist_features(
+        prompt="What is the capital of France?",
+        response="Paris, France.",
+        token_stats=original_stats,
+        internal_signal=None,
+        perturbed_token_stats=perturbed_stats,
+        perturbed_internal_signal=None,
+    )
+
+    assert "specialist_stability_logprob_shift" in stable
+    assert "specialist_stability_entropy_shift" in stable
+    assert "specialist_stability_margin_shift" in stable
+    assert unstable["specialist_stability_logprob_shift"] > stable["specialist_stability_logprob_shift"]
+    assert unstable["specialist_stability_entropy_shift"] > stable["specialist_stability_entropy_shift"]
