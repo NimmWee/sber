@@ -130,3 +130,142 @@ def test_generate_triviaqa_responses_sets_pad_token_from_eos_for_causal_lm() -> 
     )
 
     assert responses == ["generated", "generated"]
+
+
+def test_generate_triviaqa_responses_batch_size_one_returns_plain_strings() -> None:
+    module = _load_script_module("generate_triviaqa_responses.py")
+
+    class FakeTokenizer:
+        def __init__(self) -> None:
+            self.pad_token = "<pad>"
+            self.eos_token = "</s>"
+            self.pad_token_id = 0
+            self.eos_token_id = 7
+
+        def __call__(self, prompts, **kwargs):
+            return {
+                "input_ids": module.torch.tensor([[10, 11]]),
+                "attention_mask": module.torch.tensor([[1, 1]]),
+            }
+
+        def decode(self, generated_tokens, skip_special_tokens=True):
+            return "single-response"
+
+    class FakeModel:
+        def generate(self, **kwargs):
+            return module.torch.tensor([[10, 11, 12]])
+
+    class FakeProvider:
+        def __init__(self) -> None:
+            self.config = type("Config", (), {"response_delimiter": "\n\n### Response:\n"})()
+            self._tokenizer_instance = FakeTokenizer()
+
+        def _get_tokenizer(self):
+            return self._tokenizer_instance
+
+        def _get_model(self):
+            return FakeModel()
+
+        def _input_device_for_model(self, model):
+            return "cpu"
+
+    responses = module._generate_responses_for_examples(
+        examples=[type("Example", (), {"prompt": "Q1"})()],
+        token_stat_provider=FakeProvider(),
+        batch_size=1,
+    )
+
+    assert responses == ["single-response"]
+    assert isinstance(responses[0], str)
+
+
+def test_generate_triviaqa_responses_batch_size_greater_than_one_decodes_all_outputs() -> None:
+    module = _load_script_module("generate_triviaqa_responses.py")
+
+    class FakeTokenizer:
+        def __init__(self) -> None:
+            self.pad_token = "<pad>"
+            self.eos_token = "</s>"
+            self.pad_token_id = 0
+            self.eos_token_id = 7
+
+        def __call__(self, prompts, **kwargs):
+            assert len(prompts) == 2
+            return {
+                "input_ids": module.torch.tensor([[10, 11], [20, 21]]),
+                "attention_mask": module.torch.tensor([[1, 1], [1, 1]]),
+            }
+
+        def decode(self, generated_tokens, skip_special_tokens=True):
+            token_list = generated_tokens.tolist()
+            if token_list == [12]:
+                return "first-batch-response"
+            if token_list == [22]:
+                return "second-batch-response"
+            raise AssertionError(f"unexpected generated tokens: {token_list}")
+
+    class FakeModel:
+        def generate(self, **kwargs):
+            return module.torch.tensor([[10, 11, 12], [20, 21, 22]])
+
+    class FakeProvider:
+        def __init__(self) -> None:
+            self.config = type("Config", (), {"response_delimiter": "\n\n### Response:\n"})()
+            self._tokenizer_instance = FakeTokenizer()
+
+        def _get_tokenizer(self):
+            return self._tokenizer_instance
+
+        def _get_model(self):
+            return FakeModel()
+
+        def _input_device_for_model(self, model):
+            return "cpu"
+
+    responses = module._generate_responses_for_examples(
+        examples=[
+            type("Example", (), {"prompt": "Q1"})(),
+            type("Example", (), {"prompt": "Q2"})(),
+        ],
+        token_stat_provider=FakeProvider(),
+        batch_size=2,
+    )
+
+    assert responses == ["first-batch-response", "second-batch-response"]
+
+
+def test_generate_triviaqa_responses_batch_roundtrip_writes_valid_jsonl(tmp_path) -> None:
+    module = _load_script_module("generate_triviaqa_responses.py")
+    dataset_path = tmp_path / "triviaqa.jsonl"
+    output_path = tmp_path / "generated.jsonl"
+    dataset_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"question": "Q1", "answer": "A1"}),
+                json.dumps({"question": "Q2", "answer": "A2"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeProvider:
+        config = type("Config", (), {"response_delimiter": "\n\n### Response:\n"})()
+
+    module._generate_responses_for_examples = lambda **_: [
+        'first "quoted" answer\nline two',
+        "Ответ 2",
+    ]
+
+    summary = module.generate_triviaqa_responses(
+        dataset_path=dataset_path,
+        output_path=output_path,
+        token_stat_provider=FakeProvider(),
+        max_samples=2,
+        batch_size=2,
+    )
+
+    assert summary["processed_samples"] == 2
+    written_rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+    assert written_rows[0]["response"] == 'first "quoted" answer\nline two'
+    assert written_rows[1]["response"] == "Ответ 2"

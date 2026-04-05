@@ -96,6 +96,30 @@ def test_build_generated_triviaqa_rows_preserves_output_schema() -> None:
     ]
 
 
+def test_build_generated_triviaqa_rows_coerces_fields_to_strings() -> None:
+    examples = [
+        TriviaQAExample(
+            prompt="123",
+            reference_answer="456",
+            source="789",
+        )
+    ]
+
+    rows = build_generated_triviaqa_rows(
+        examples=examples,
+        generated_responses=[101112],
+    )
+
+    assert rows == [
+        {
+            "prompt": "123",
+            "reference_answer": "456",
+            "response": "101112",
+            "source": "789",
+        }
+    ]
+
+
 def test_load_triviaqa_examples_supports_pair_parquet_shape(monkeypatch, tmp_path) -> None:
     dataset_path = tmp_path / "train-00000-of-00001.parquet"
     dataset_path.write_text("", encoding="utf-8")

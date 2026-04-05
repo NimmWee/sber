@@ -63,10 +63,10 @@ def build_generated_triviaqa_rows(
 
     return [
         {
-            "prompt": example.prompt,
-            "reference_answer": example.reference_answer,
-            "response": response,
-            "source": example.source,
+            "prompt": str(example.prompt),
+            "reference_answer": str(example.reference_answer),
+            "response": str(response),
+            "source": str(example.source),
         }
         for example, response in zip(examples, generated_responses)
     ]
