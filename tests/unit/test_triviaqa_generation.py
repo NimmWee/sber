@@ -12,8 +12,11 @@ if str(SRC_ROOT) not in sys.path:
 from data.triviaqa_generation import (
     TriviaQAExample,
     build_generated_triviaqa_rows,
+    clean_invalid_jsonl_rows,
     load_triviaqa_examples,
     select_triviaqa_examples,
+    validate_jsonl_rows,
+    write_generated_triviaqa_rows,
 )
 
 
@@ -114,4 +117,61 @@ def test_load_triviaqa_examples_supports_pair_parquet_shape(monkeypatch, tmp_pat
             prompt="Which American-born Sinclair won the Nobel Prize for Literature in 1930?",
             reference_answer="Sinclair Lewis",
         )
+    ]
+
+
+def test_write_generated_triviaqa_rows_roundtrips_quotes_newlines_and_unicode(tmp_path) -> None:
+    output_path = tmp_path / "generated.jsonl"
+    rows = [
+        {
+            "prompt": 'Who said "hello"?',
+            "reference_answer": "A greeting",
+            "response": 'He said "hello"\nand then added Привет.',
+            "source": "triviaqa",
+        }
+    ]
+
+    write_generated_triviaqa_rows(rows=rows, output_path=output_path, validate=True)
+
+    diagnostics = validate_jsonl_rows(output_path)
+
+    assert diagnostics["valid_row_count"] == 1
+    assert diagnostics["invalid_row_count"] == 0
+    assert diagnostics["rows"][0]["response"] == 'He said "hello"\nand then added Привет.'
+
+
+def test_clean_invalid_jsonl_rows_keeps_only_valid_rows(tmp_path) -> None:
+    input_path = tmp_path / "broken.jsonl"
+    output_path = tmp_path / "clean.jsonl"
+    input_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "prompt": "Q1",
+                        "reference_answer": "A1",
+                        "response": "R1",
+                        "source": "triviaqa",
+                    },
+                    ensure_ascii=False,
+                ),
+                '{"prompt":"Q2","reference_answer":"A2","response":"unterminated}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = clean_invalid_jsonl_rows(input_path=input_path, output_path=output_path)
+
+    assert summary["kept_row_count"] == 1
+    assert summary["dropped_row_count"] == 1
+    cleaned = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+    assert cleaned == [
+        {
+            "prompt": "Q1",
+            "reference_answer": "A1",
+            "response": "R1",
+            "source": "triviaqa",
+        }
     ]

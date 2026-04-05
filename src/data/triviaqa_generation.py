@@ -76,14 +76,55 @@ def write_generated_triviaqa_rows(
     *,
     rows: list[dict[str, str]],
     output_path: str | Path,
+    validate: bool = False,
 ) -> Path:
     artifact_path = Path(output_path)
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    artifact_path.write_text(
-        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
-        encoding="utf-8",
-    )
+    with artifact_path.open("w", encoding="utf-8", newline="") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    if validate:
+        diagnostics = validate_jsonl_rows(artifact_path)
+        if diagnostics["invalid_row_count"] > 0:
+            raise ValueError("generated TriviaQA JSONL contains invalid rows")
     return artifact_path
+
+
+def validate_jsonl_rows(path: str | Path) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    invalid_row_count = 0
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            invalid_row_count += 1
+            continue
+        rows.append(row)
+    return {
+        "valid_row_count": len(rows),
+        "invalid_row_count": invalid_row_count,
+        "rows": rows,
+    }
+
+
+def clean_invalid_jsonl_rows(
+    *,
+    input_path: str | Path,
+    output_path: str | Path,
+) -> dict[str, Any]:
+    diagnostics = validate_jsonl_rows(input_path)
+    write_generated_triviaqa_rows(
+        rows=diagnostics["rows"],
+        output_path=output_path,
+        validate=True,
+    )
+    return {
+        "kept_row_count": diagnostics["valid_row_count"],
+        "dropped_row_count": diagnostics["invalid_row_count"],
+        "output_path": str(output_path),
+    }
 
 
 def _extract_question(record: dict[str, Any]) -> str:

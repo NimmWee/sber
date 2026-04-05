@@ -45,7 +45,11 @@ def generate_triviaqa_responses(
         examples=examples,
         generated_responses=responses,
     )
-    artifact_path = write_generated_triviaqa_rows(rows=rows, output_path=output_path)
+    artifact_path = write_generated_triviaqa_rows(
+        rows=rows,
+        output_path=output_path,
+        validate=True,
+    )
     average_response_length = (
         sum(len(row["response"]) for row in rows) / len(rows) if rows else 0.0
     )
