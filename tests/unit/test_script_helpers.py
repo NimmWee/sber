@@ -260,3 +260,15 @@ def test_resolve_triviaqa_path_uses_local_data_file(tmp_path) -> None:
     resolved = resolve_triviaqa_path(project_root=project_root)
 
     assert resolved == dataset_path
+
+
+def test_resolve_triviaqa_path_finds_pair_parquet_dataset(tmp_path) -> None:
+    project_root = tmp_path / "project"
+    pair_dir = project_root / "trivia-qa" / "pair"
+    pair_dir.mkdir(parents=True)
+    dataset_path = pair_dir / "train-00000-of-00001.parquet"
+    dataset_path.write_text("", encoding="utf-8")
+
+    resolved = resolve_triviaqa_path(project_root=project_root)
+
+    assert resolved == dataset_path

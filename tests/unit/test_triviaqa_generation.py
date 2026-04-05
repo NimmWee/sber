@@ -91,3 +91,27 @@ def test_build_generated_triviaqa_rows_preserves_output_schema() -> None:
             "source": "triviaqa",
         }
     ]
+
+
+def test_load_triviaqa_examples_supports_pair_parquet_shape(monkeypatch, tmp_path) -> None:
+    dataset_path = tmp_path / "train-00000-of-00001.parquet"
+    dataset_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "data.triviaqa_generation._load_parquet_records",
+        lambda _: [
+            {
+                "query": "Which American-born Sinclair won the Nobel Prize for Literature in 1930?",
+                "answer": "Sinclair Lewis",
+            }
+        ],
+    )
+
+    examples = load_triviaqa_examples(dataset_path)
+
+    assert examples == [
+        TriviaQAExample(
+            prompt="Which American-born Sinclair won the Nobel Prize for Literature in 1930?",
+            reference_answer="Sinclair Lewis",
+        )
+    ]

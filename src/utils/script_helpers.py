@@ -86,6 +86,7 @@ def resolve_triviaqa_path(
         project_root_path / "data" / "triviaqa" / "triviaqa.json",
         project_root_path / "data" / "triviaqa" / "unfiltered-web-dev.json",
         project_root_path / "data" / "triviaqa" / "wikipedia-dev.json",
+        project_root_path / "trivia-qa" / "pair" / "train-00000-of-00001.parquet",
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -94,6 +95,12 @@ def resolve_triviaqa_path(
     data_root = project_root_path / "data"
     if data_root.exists():
         for candidate in sorted(data_root.rglob("*triviaqa*.json*")):
+            if candidate.is_file():
+                return candidate
+
+    triviaqa_root = project_root_path / "trivia-qa"
+    if triviaqa_root.exists():
+        for candidate in sorted(triviaqa_root.rglob("*.parquet")):
             if candidate.is_file():
                 return candidate
 

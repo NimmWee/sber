@@ -21,6 +21,8 @@ def load_triviaqa_examples(path: str | Path) -> list[TriviaQAExample]:
             for line in dataset_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
+    elif dataset_path.suffix == ".parquet":
+        records = _load_parquet_records(dataset_path)
     else:
         payload = json.loads(dataset_path.read_text(encoding="utf-8"))
         if isinstance(payload, list):
@@ -85,7 +87,7 @@ def write_generated_triviaqa_rows(
 
 
 def _extract_question(record: dict[str, Any]) -> str:
-    question = record.get("question") or record.get("Question")
+    question = record.get("question") or record.get("Question") or record.get("query")
     if not isinstance(question, str) or not question.strip():
         raise ValueError("TriviaQA record must contain a non-empty question")
     return question
@@ -105,3 +107,21 @@ def _extract_answer(record: dict[str, Any]) -> str:
                 if isinstance(alias, str) and alias.strip():
                     return alias
     raise ValueError("TriviaQA record must contain a non-empty answer")
+
+
+def _load_parquet_records(path: str | Path) -> list[dict[str, Any]]:
+    try:
+        import pandas as pd  # type: ignore
+
+        return pd.read_parquet(path).to_dict(orient="records")
+    except ModuleNotFoundError:
+        pass
+
+    try:
+        import pyarrow.parquet as pq  # type: ignore
+
+        return pq.read_table(path).to_pylist()
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "parquet support requires pandas or pyarrow to load TriviaQA locally"
+        ) from error
