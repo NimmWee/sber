@@ -69,6 +69,37 @@ def resolve_text_training_seed_path(
     raise FileNotFoundError("public_seed_facts.jsonl was not found")
 
 
+def resolve_triviaqa_path(
+    *,
+    project_root: str | Path,
+    explicit_dataset_path: str | Path | None = None,
+) -> Path:
+    if explicit_dataset_path is not None:
+        return Path(explicit_dataset_path)
+
+    project_root_path = Path(project_root)
+    candidates = [
+        project_root_path / "data" / "triviaqa.jsonl",
+        project_root_path / "data" / "triviaqa.json",
+        project_root_path / "data" / "textual" / "triviaqa.jsonl",
+        project_root_path / "data" / "triviaqa" / "triviaqa.jsonl",
+        project_root_path / "data" / "triviaqa" / "triviaqa.json",
+        project_root_path / "data" / "triviaqa" / "unfiltered-web-dev.json",
+        project_root_path / "data" / "triviaqa" / "wikipedia-dev.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    data_root = project_root_path / "data"
+    if data_root.exists():
+        for candidate in sorted(data_root.rglob("*triviaqa*.json*")):
+            if candidate.is_file():
+                return candidate
+
+    raise FileNotFoundError("local TriviaQA dataset was not found")
+
+
 def write_json_artifact(
     *,
     artifact_dir: str | Path,
