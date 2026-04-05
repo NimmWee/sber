@@ -305,6 +305,31 @@ def build_stability_specialist_blend(
     ]
 
 
+def build_weighted_score_ensemble(
+    *,
+    scorer_probabilities: dict[str, list[float]],
+    weights: dict[str, float],
+) -> list[float]:
+    active_names = [
+        name
+        for name in scorer_probabilities
+        if name in weights and float(weights[name]) > 0.0
+    ]
+    if not active_names:
+        return []
+    total_weight = sum(float(weights[name]) for name in active_names)
+    if total_weight <= 0.0:
+        return []
+    ensemble: list[float] = []
+    for score_tuple in zip(*(scorer_probabilities[name] for name in active_names)):
+        weighted_sum = sum(
+            float(weights[name]) * float(score)
+            for name, score in zip(active_names, score_tuple)
+        )
+        ensemble.append(weighted_sum / total_weight)
+    return ensemble
+
+
 def _normalize_token(token: str) -> str:
     return token.strip("Ġ▁ ,.;:!?()[]{}\"'")
 

@@ -1,6 +1,8 @@
 from pathlib import Path
 import sys
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -9,6 +11,7 @@ if str(SRC_ROOT) not in sys.path:
 
 
 from eval.specialist_ensemble import (
+    build_weighted_score_ensemble,
     build_fusion_feature_row,
     extract_specialist_features,
     select_important_specialist_features,
@@ -236,3 +239,20 @@ def test_extract_specialist_features_adds_prompt_stability_signals_from_perturbe
     assert "specialist_stability_margin_shift" in stable
     assert unstable["specialist_stability_logprob_shift"] > stable["specialist_stability_logprob_shift"]
     assert unstable["specialist_stability_entropy_shift"] > stable["specialist_stability_entropy_shift"]
+
+
+def test_build_weighted_score_ensemble_blends_independent_scores_with_normalized_weights() -> None:
+    probabilities = build_weighted_score_ensemble(
+        scorer_probabilities={
+            "baseline": [0.2, 0.4],
+            "numeric": [0.8, 0.6],
+            "long": [0.5, 0.1],
+        },
+        weights={
+            "baseline": 0.5,
+            "numeric": 0.3,
+            "long": 0.2,
+        },
+    )
+
+    assert probabilities == pytest.approx([0.44, 0.4])

@@ -20,6 +20,7 @@ from eval.specialist_ensemble import (
     build_fusion_feature_row,
     build_stability_specialist_blend,
     build_single_specialist_blend,
+    build_weighted_score_ensemble,
     extract_specialist_features,
     select_important_specialist_features,
     select_specialist_feature_subset,
@@ -31,6 +32,11 @@ from utils.script_helpers import write_json_artifact
 
 
 DEFAULT_LATENCY_REPEAT_COUNT = 5
+WEIGHTED_INDEPENDENT_ENSEMBLE_WEIGHTS = {
+    "baseline": 0.5,
+    "numeric": 0.3,
+    "long": 0.2,
+}
 
 
 def run_public_benchmark_ablation(
@@ -856,6 +862,53 @@ def _evaluate_specialist_ensemble_variants(
                 + len(stability_selected_feature_names)
             ),
         ),
+        "weighted_independent_score_ensemble": _evaluate_probability_variant(
+            name="weighted_independent_score_ensemble",
+            probabilities=build_weighted_score_ensemble(
+                scorer_probabilities={
+                    "baseline": baseline_validation_scores,
+                    "numeric": numeric_validation_scores,
+                    "long": long_validation_scores,
+                },
+                weights=WEIGHTED_INDEPENDENT_ENSEMBLE_WEIGHTS,
+            ),
+            validation_examples=validation_examples,
+            latency_total_mean_ms=_measure_score_only_latency(
+                [
+                    baseline_validation_scores[0],
+                    numeric_validation_scores[0],
+                    long_validation_scores[0],
+                ],
+                repeat_count=latency_repeat_count,
+            ),
+            artifact_dir=artifact_dir / "weighted_independent_score_ensemble",
+            score_components_mean={
+                "baseline_score": _mean(baseline_validation_scores),
+                "numeric_specialist_score": _mean(numeric_validation_scores),
+                "long_specialist_score": _mean(long_validation_scores),
+            },
+            feature_importance=[],
+            ensemble_weights=dict(WEIGHTED_INDEPENDENT_ENSEMBLE_WEIGHTS),
+            scorer_pr_auc={
+                "baseline": compute_pr_auc(validation_labels, baseline_validation_scores),
+                "numeric": compute_pr_auc(validation_labels, numeric_validation_scores),
+                "long": compute_pr_auc(validation_labels, long_validation_scores),
+            },
+            scorer_correlations={
+                "baseline__numeric": _score_pair_correlation(
+                    baseline_validation_scores,
+                    numeric_validation_scores,
+                ),
+                "baseline__long": _score_pair_correlation(
+                    baseline_validation_scores,
+                    long_validation_scores,
+                ),
+                "numeric__long": _score_pair_correlation(
+                    numeric_validation_scores,
+                    long_validation_scores,
+                ),
+            },
+        ),
     }
 
     fusion_train_rows = [
@@ -960,6 +1013,9 @@ def _evaluate_probability_variant(
     selected_feature_names: list[str] | None = None,
     feature_count_before: int | None = None,
     feature_count_after: int | None = None,
+    ensemble_weights: dict[str, float] | None = None,
+    scorer_pr_auc: dict[str, float] | None = None,
+    scorer_correlations: dict[str, float] | None = None,
     model=None,
 ) -> dict:
     labels = [example.label for example in validation_examples]
@@ -997,6 +1053,9 @@ def _evaluate_probability_variant(
             "selected_feature_names": selected_feature_names or [],
             "feature_count_before": feature_count_before,
             "feature_count_after": feature_count_after,
+            "ensemble_weights": ensemble_weights or {},
+            "scorer_pr_auc": scorer_pr_auc or {},
+            "scorer_correlations": scorer_correlations or {},
         },
     )
     if model is not None:
@@ -1030,6 +1089,9 @@ def _evaluate_probability_variant(
         "selected_feature_names": selected_feature_names or [],
         "feature_count_before": feature_count_before,
         "feature_count_after": feature_count_after,
+        "ensemble_weights": ensemble_weights or {},
+        "scorer_pr_auc": scorer_pr_auc or {},
+        "scorer_correlations": scorer_correlations or {},
     }
 
 
@@ -1144,6 +1206,26 @@ def _score_label_correlation(labels: list[int], probabilities: list[float]) -> f
     if label_variance <= 0.0 or probability_variance <= 0.0:
         return 0.0
     return covariance / ((label_variance ** 0.5) * (probability_variance ** 0.5))
+
+
+def _score_pair_correlation(left_scores: list[float], right_scores: list[float]) -> float:
+    if (
+        not left_scores
+        or not right_scores
+        or len(left_scores) != len(right_scores)
+    ):
+        return 0.0
+    left_mean = sum(left_scores) / len(left_scores)
+    right_mean = sum(right_scores) / len(right_scores)
+    covariance = sum(
+        (float(left) - left_mean) * (float(right) - right_mean)
+        for left, right in zip(left_scores, right_scores)
+    )
+    left_variance = sum((float(left) - left_mean) ** 2 for left in left_scores)
+    right_variance = sum((float(right) - right_mean) ** 2 for right in right_scores)
+    if left_variance <= 0.0 or right_variance <= 0.0:
+        return 0.0
+    return covariance / ((left_variance ** 0.5) * (right_variance ** 0.5))
 
 
 def _mean(values: list[float]) -> float:
