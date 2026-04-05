@@ -89,6 +89,10 @@ def test_run_public_benchmark_ablation_writes_summary(tmp_path) -> None:
     assert "baseline_plus_stability_specialist" in summary["variants"]
     assert "baseline_plus_all_specialists" in summary["variants"]
     assert "weighted_independent_score_ensemble" in summary["variants"]
+    assert "weighted_independent_score_ensemble_b70_n20_l10" in summary["variants"]
+    assert "weighted_independent_score_ensemble_b65_n25_l10" in summary["variants"]
+    assert "weighted_independent_score_ensemble_b65_n20_l15" in summary["variants"]
+    assert "weighted_independent_score_ensemble_b60_n25_l15" in summary["variants"]
     assert "fused_specialist_ensemble" in summary["variants"]
     assert "precision" in summary["variants"]["fused_specialist_ensemble"]
     assert "recall" in summary["variants"]["fused_specialist_ensemble"]
@@ -108,6 +112,8 @@ def test_run_public_benchmark_ablation_writes_summary(tmp_path) -> None:
     assert "ensemble_weights" in summary["variants"]["weighted_independent_score_ensemble"]
     assert "scorer_pr_auc" in summary["variants"]["weighted_independent_score_ensemble"]
     assert "scorer_correlations" in summary["variants"]["weighted_independent_score_ensemble"]
+    assert "best_weighted_independent_score_ensemble_variant" in summary
+    assert "best_weighted_independent_score_ensemble_weights" in summary
     assert "best_variant" in summary
     assert Path(summary["artifact_path"]).exists()
 

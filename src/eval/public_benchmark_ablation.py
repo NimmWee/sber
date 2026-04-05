@@ -37,6 +37,12 @@ WEIGHTED_INDEPENDENT_ENSEMBLE_WEIGHTS = {
     "numeric": 0.3,
     "long": 0.2,
 }
+WEIGHTED_INDEPENDENT_ENSEMBLE_SWEEP = (
+    ("weighted_independent_score_ensemble_b70_n20_l10", {"baseline": 0.70, "numeric": 0.20, "long": 0.10}),
+    ("weighted_independent_score_ensemble_b65_n25_l10", {"baseline": 0.65, "numeric": 0.25, "long": 0.10}),
+    ("weighted_independent_score_ensemble_b65_n20_l15", {"baseline": 0.65, "numeric": 0.20, "long": 0.15}),
+    ("weighted_independent_score_ensemble_b60_n25_l15", {"baseline": 0.60, "numeric": 0.25, "long": 0.15}),
+)
 
 
 def run_public_benchmark_ablation(
@@ -207,6 +213,18 @@ def run_public_benchmark_ablation(
         variants,
         key=lambda name: (variants[name]["pr_auc"], -variants[name]["latency_total_mean_ms"]),
     )
+    weighted_ensemble_variants = {
+        name: variant
+        for name, variant in variants.items()
+        if name.startswith("weighted_independent_score_ensemble")
+    }
+    best_weighted_ensemble_variant_name = max(
+        weighted_ensemble_variants,
+        key=lambda name: (
+            weighted_ensemble_variants[name]["pr_auc"],
+            -weighted_ensemble_variants[name]["latency_total_mean_ms"],
+        ),
+    )
     for name, variant in variants.items():
         variant["pr_auc_delta_vs_base"] = variant["pr_auc"] - base_variant["pr_auc"]
         variant["latency_delta_vs_base_ms"] = (
@@ -222,6 +240,10 @@ def run_public_benchmark_ablation(
         "sample_size": len(cached_validation_examples),
         "variants": variants,
         "best_variant": best_variant_name,
+        "best_weighted_independent_score_ensemble_variant": best_weighted_ensemble_variant_name,
+        "best_weighted_independent_score_ensemble_weights": weighted_ensemble_variants[
+            best_weighted_ensemble_variant_name
+        ].get("ensemble_weights", {}),
         "cached_signal_artifact_path": str(cached_signal_artifact_path),
         "signal_collection_runtime_ms": signal_collection_runtime_ms,
         "estimated_signal_runtime_improvement_ms": signal_collection_runtime_ms
@@ -910,6 +932,54 @@ def _evaluate_specialist_ensemble_variants(
             },
         ),
     }
+    for variant_name, weights in WEIGHTED_INDEPENDENT_ENSEMBLE_SWEEP:
+        variants[variant_name] = _evaluate_probability_variant(
+            name=variant_name,
+            probabilities=build_weighted_score_ensemble(
+                scorer_probabilities={
+                    "baseline": baseline_validation_scores,
+                    "numeric": numeric_validation_scores,
+                    "long": long_validation_scores,
+                },
+                weights=weights,
+            ),
+            validation_examples=validation_examples,
+            latency_total_mean_ms=_measure_score_only_latency(
+                [
+                    baseline_validation_scores[0],
+                    numeric_validation_scores[0],
+                    long_validation_scores[0],
+                ],
+                repeat_count=latency_repeat_count,
+            ),
+            artifact_dir=artifact_dir / variant_name,
+            score_components_mean={
+                "baseline_score": _mean(baseline_validation_scores),
+                "numeric_specialist_score": _mean(numeric_validation_scores),
+                "long_specialist_score": _mean(long_validation_scores),
+            },
+            feature_importance=[],
+            ensemble_weights=dict(weights),
+            scorer_pr_auc={
+                "baseline": compute_pr_auc(validation_labels, baseline_validation_scores),
+                "numeric": compute_pr_auc(validation_labels, numeric_validation_scores),
+                "long": compute_pr_auc(validation_labels, long_validation_scores),
+            },
+            scorer_correlations={
+                "baseline__numeric": _score_pair_correlation(
+                    baseline_validation_scores,
+                    numeric_validation_scores,
+                ),
+                "baseline__long": _score_pair_correlation(
+                    baseline_validation_scores,
+                    long_validation_scores,
+                ),
+                "numeric__long": _score_pair_correlation(
+                    numeric_validation_scores,
+                    long_validation_scores,
+                ),
+            },
+        )
 
     fusion_train_rows = [
         build_fusion_feature_row(
