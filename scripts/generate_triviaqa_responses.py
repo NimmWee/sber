@@ -102,8 +102,10 @@ def _generate_responses_for_examples(
 
     tokenizer = token_stat_provider._get_tokenizer()
     model = token_stat_provider._get_model()
-    pad_token_id = getattr(tokenizer, "pad_token_id", None)
     eos_token_id = getattr(tokenizer, "eos_token_id", None)
+    if getattr(tokenizer, "pad_token", None) is None and eos_token_id is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+    pad_token_id = getattr(tokenizer, "pad_token_id", None)
     if pad_token_id is None:
         pad_token_id = eos_token_id
 

@@ -75,3 +75,58 @@ def test_generate_triviaqa_responses_script_writes_expected_schema(
     assert "processed_samples=2" in output
     assert "output_path=" in output
     assert "average_response_length=13.50" in output
+
+
+def test_generate_triviaqa_responses_sets_pad_token_from_eos_for_causal_lm() -> None:
+    module = _load_script_module("generate_triviaqa_responses.py")
+
+    class FakeTokenizer:
+        def __init__(self) -> None:
+            self.pad_token = None
+            self.eos_token = "</s>"
+            self.pad_token_id = None
+            self.eos_token_id = 7
+
+        def __call__(self, prompts, **kwargs):
+            assert self.pad_token == self.eos_token
+            assert kwargs["padding"] is True
+            assert kwargs["return_tensors"] == "pt"
+            return {
+                "input_ids": module.torch.tensor([[1, 2], [1, 2]]),
+                "attention_mask": module.torch.tensor([[1, 1], [1, 1]]),
+            }
+
+        def decode(self, generated_tokens, skip_special_tokens=True):
+            return "generated"
+
+    class FakeModel:
+        def generate(self, **kwargs):
+            assert kwargs["pad_token_id"] == 7
+            return module.torch.tensor([[1, 2, 3], [1, 2, 4]])
+
+    class FakeProvider:
+        def __init__(self) -> None:
+            self.config = type("Config", (), {"response_delimiter": "\n\n### Response:\n"})()
+            self._tokenizer_instance = FakeTokenizer()
+
+        def _get_tokenizer(self):
+            return self._tokenizer_instance
+
+        def _get_model(self):
+            return FakeModel()
+
+        def _input_device_for_model(self, model):
+            return "cpu"
+
+    examples = [
+        type("Example", (), {"prompt": "Q1"})(),
+        type("Example", (), {"prompt": "Q2"})(),
+    ]
+
+    responses = module._generate_responses_for_examples(
+        examples=examples,
+        token_stat_provider=FakeProvider(),
+        batch_size=2,
+    )
+
+    assert responses == ["generated", "generated"]
