@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python scripts/score_private_dataset.py "$@"
+python scripts/score_frozen_submission.py "$@"

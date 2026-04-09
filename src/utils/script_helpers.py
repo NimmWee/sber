@@ -11,6 +11,10 @@ def load_transformers_provider_config(
     return TransformersProviderConfig.from_json(path)
 
 
+def load_frozen_submission_config(path: str | Path) -> dict:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
 def resolve_transformers_provider_config(
     *,
     project_root: str | Path,
@@ -105,6 +109,21 @@ def resolve_triviaqa_path(
                 return candidate
 
     raise FileNotFoundError("local TriviaQA dataset was not found")
+
+
+def resolve_frozen_submission_config(
+    *,
+    project_root: str | Path,
+    explicit_config_path: str | Path | None = None,
+) -> dict:
+    if explicit_config_path is not None:
+        return load_frozen_submission_config(explicit_config_path)
+
+    project_root_path = Path(project_root)
+    default_candidate = project_root_path / "configs" / "frozen_submission.json"
+    if default_candidate.exists():
+        return load_frozen_submission_config(default_candidate)
+    raise FileNotFoundError("frozen_submission.json was not found")
 
 
 def write_json_artifact(

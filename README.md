@@ -1,113 +1,101 @@
 # sber
 
-Production-minded factual hallucination detector for the Sber hackathon.
+Production-grade factual hallucination detector for the Sber hackathon.
 
-## Final Detector
+## Frozen Submission Candidate
 
-Final default detector:
+The frozen final submission candidate is the exact historical best-performing build:
+- historical best commit: `d3fa946`
+- frozen variant: `baseline_plus_all_specialists`
+- historical public PR-AUC: `0.6881`
+
+This repository now treats that build as the active submission path.
+
+## Method Summary
+
+Input:
+- `prompt + response`
+
+Runtime scoring path:
+- one forward pass of local GigaChat on `prompt + delimiter + response`
 - structural features
-- base token uncertainty only
+- base token uncertainty
 - compact internal features
-- LightGBM head
-- no extra uncertainty groups in the default path
-- specialist ensemble variants kept for research / ablation only
+- lightweight specialist scorers:
+  - numeric
+  - entity-like
+  - long-response
+- frozen weighted blend:
+  - baseline `0.55`
+  - numeric specialist `0.15`
+  - entity specialist `0.15`
+  - long specialist `0.15`
 
-Current default token uncertainty set:
-- `token_mean_logprob`
-- `token_min_logprob`
-- `token_entropy_mean`
-- `token_top1_top2_margin_mean`
-- `token_tail_low_confidence_rate`
-- `token_confidence_decay`
+Output:
+- `hallucination_probability` in `[0, 1]`
 
-## Architecture
+## Dataset And Provenance
 
-Runtime path:
-- single forward pass over `prompt + delimiter + response`
-- token-stat collection for response tokens only
-- deterministic feature extraction
-- lightweight LightGBM head
-- output: `hallucination_probability` in `[0, 1]`
+Training data is text-based and auditable.
 
-Research-only paths kept behind flags:
-- extra token uncertainty groups
-- specialist ensemble / fusion comparisons
+The repository preserves:
+- public factual seeds in `data/public_seed_facts.jsonl`
+- textual dataset builder in `src/data/textual_dataset.py`
+- feature reconstruction from text in `src/data/textual_preprocessing.py`
+- frozen submission training/scoring code in `src/submission/frozen_best.py`
 
-Training data path:
-- text-based, auditable training examples with provenance
-- public seed ingestion + synthetic corruptions + correct factual augmentations
-- benchmark used for evaluation only
+The preview benchmark is for evaluation only and is not used as training data.
 
 ## Reproducible Commands
 
 Install:
-
 ```bash
 bash scripts/install.sh
 ```
 
-Build textual training dataset:
-
-```bash
-python scripts/build_text_training_dataset.py
-```
-
-Preprocess training dataset into model-ready rows:
-
-```bash
-python scripts/preprocess_text_training_dataset.py --config configs/token_stat_provider.local.json
-```
-
-Train current detector:
-
+Train the frozen submission candidate:
 ```bash
 bash scripts/train.sh --config configs/token_stat_provider.local.json
 ```
 
-Score private dataset:
-
+Score the private benchmark:
 ```bash
-bash scripts/score_private.sh --config configs/token_stat_provider.local.json --input-path private_test.csv
+bash scripts/score_private.sh --config configs/token_stat_provider.local.json
 ```
 
-Provider / evaluation commands:
-
+Explicit Python entrypoints:
 ```bash
-python scripts/run_smoke_provider.py --config configs/token_stat_provider.local.json
-python scripts/run_eval_real_provider.py --config configs/token_stat_provider.local.json
-python scripts/run_latency_real_provider.py --config configs/token_stat_provider.local.json
-python scripts/run_error_analysis_real_provider.py --config configs/token_stat_provider.local.json
+python scripts/build_text_training_dataset.py
+python scripts/train_frozen_submission.py --config configs/token_stat_provider.local.json --dataset-path data/processed/textual_training_dataset.jsonl --artifact-dir model/frozen_best
+python scripts/score_frozen_submission.py --config configs/token_stat_provider.local.json --input-path data/bench/knowledge_bench_private.csv --artifact-dir model/frozen_best --output-path data/bench/knowledge_bench_private_scores.csv
 ```
 
-Optional research-only comparisons:
+## Expected Files
 
-```bash
-python scripts/run_ablation_real_provider.py --config configs/token_stat_provider.local.json
-python scripts/run_internal_probe_compare_real_provider.py --config configs/token_stat_provider.local.json
-python scripts/run_public_benchmark_ablation.py --config configs/token_stat_provider.local.json
-```
+Private scoring input:
+- `data/bench/knowledge_bench_private.csv`
 
-## Ablation Summary
+Private scoring output:
+- `data/bench/knowledge_bench_private_scores.csv`
 
-Final selection:
-- keep `structural + base token uncertainty + compact internal features + LightGBM` as the strongest default detector family
-- drop extra uncertainty groups from the default path
-- keep specialist ensemble and recovery-style variants behind explicit comparison paths
+Frozen model artifacts:
+- `model/frozen_best/`
 
-Decision rationale:
-- token uncertainty provides the main stable signal
-- compact internal features improved the strongest full-benchmark result
-- larger feature families and recovery-only rebalancing did not generalize reliably enough to become default
+Frozen submission config:
+- `configs/frozen_submission.json`
 
-## Layout
+## Repository Layout
 
-- `data/` public seed facts and processed textual training datasets
-- `model/` trained detector artifacts
-- `notebooks/` optional reproducible analysis notebooks
-- `src/` application and research code
-- `tests/` unit, integration, contract, and regression checks
-- `configs/` runtime and experiment configuration
-- `scripts/` automation helpers
-- `experiments/` exploratory work
-- `artifacts/` generated outputs
-- `.codex/` local Codex configuration, skills, and agent role definitions
+- `configs/` runtime and frozen-submission configuration
+- `data/bench/` private benchmark input/output location
+- `data/` text-based seed data and processed datasets
+- `model/frozen_best/` frozen submission artifacts
+- `src/submission/` final frozen submission code
+- `scripts/` install, train, score, and utility entrypoints
+- `notebooks/` optional analysis notebooks
+
+## Reproducibility Notes
+
+- The active submission path is frozen to the historical best specialist blend.
+- Later degraded experiments remain in the repository for auditability, but the shell scripts and final submission path point only to the frozen build.
+- Runtime scoring does not use external APIs, retrieval, or multi-pass generation.

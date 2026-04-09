@@ -11,7 +11,9 @@ if str(SRC_ROOT) not in sys.path:
 
 from utils.script_helpers import (
     build_ablation_examples,
+    load_frozen_submission_config,
     load_transformers_provider_config,
+    resolve_frozen_submission_config,
     resolve_public_benchmark_path,
     resolve_triviaqa_path,
     resolve_text_training_seed_path,
@@ -272,3 +274,56 @@ def test_resolve_triviaqa_path_finds_pair_parquet_dataset(tmp_path) -> None:
     resolved = resolve_triviaqa_path(project_root=project_root)
 
     assert resolved == dataset_path
+
+
+def test_load_frozen_submission_config_reads_historical_best_metadata(tmp_path) -> None:
+    config_path = tmp_path / "frozen_submission.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "historical_best_commit": "d3fa946",
+                "historical_best_variant": "baseline_plus_all_specialists",
+                "historical_best_pr_auc": 0.6881,
+                "blend_weights": {
+                    "baseline": 0.55,
+                    "numeric": 0.15,
+                    "entity": 0.15,
+                    "long": 0.15,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_frozen_submission_config(config_path)
+
+    assert config["historical_best_commit"] == "d3fa946"
+    assert config["historical_best_variant"] == "baseline_plus_all_specialists"
+    assert config["blend_weights"]["baseline"] == 0.55
+
+
+def test_resolve_frozen_submission_config_uses_default_config_file(tmp_path) -> None:
+    project_root = tmp_path / "project"
+    config_dir = project_root / "configs"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "frozen_submission.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "historical_best_commit": "d3fa946",
+                "historical_best_variant": "baseline_plus_all_specialists",
+                "historical_best_pr_auc": 0.6881,
+                "blend_weights": {
+                    "baseline": 0.55,
+                    "numeric": 0.15,
+                    "entity": 0.15,
+                    "long": 0.15,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = resolve_frozen_submission_config(project_root=project_root)
+
+    assert resolved["historical_best_commit"] == "d3fa946"

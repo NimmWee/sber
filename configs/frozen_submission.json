@@ -1,0 +1,11 @@
+{
+  "historical_best_commit": "d3fa946",
+  "historical_best_variant": "baseline_plus_all_specialists",
+  "historical_best_pr_auc": 0.6881,
+  "blend_weights": {
+    "baseline": 0.55,
+    "numeric": 0.15,
+    "entity": 0.15,
+    "long": 0.15
+  }
+}
