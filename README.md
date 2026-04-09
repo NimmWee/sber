@@ -127,6 +127,34 @@ bash scripts/score_private.sh \
   --output-path data/bench/knowledge_bench_private_scores.csv
 ```
 
+## Быстрый запуск в Kaggle
+
+В репозитории уже есть готовый committed config для Kaggle:
+- `configs/token_stat_provider.kaggle.json`
+
+Если private файл называется `knowledge_bench_private_no_labels.csv`, то из корня репозитория в Kaggle можно запускать так:
+
+```bash
+bash scripts/install.sh
+bash scripts/train.sh --config configs/token_stat_provider.kaggle.json
+bash scripts/score_private.sh \
+  --config configs/token_stat_provider.kaggle.json \
+  --input-path /kaggle/input/<YOUR_DATASET_NAME>/knowledge_bench_private_no_labels.csv \
+  --output-path data/bench/knowledge_bench_private_scores.csv
+```
+
+Если в kaggle shell нет `python`, но есть `python3`, можно явно указать интерпретатор:
+
+```bash
+export PYTHON_BIN=python3
+bash scripts/install.sh
+bash scripts/train.sh --config configs/token_stat_provider.kaggle.json
+bash scripts/score_private.sh \
+  --config configs/token_stat_provider.kaggle.json \
+  --input-path /kaggle/input/<YOUR_DATASET_NAME>/knowledge_bench_private_no_labels.csv \
+  --output-path data/bench/knowledge_bench_private_scores.csv
+```
+
 ## Прямые Python entrypoints
 
 Если удобнее запускать без shell-обёрток:
