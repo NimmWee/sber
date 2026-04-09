@@ -75,3 +75,10 @@ def test_obsolete_experimental_runner_scripts_are_removed_from_submission_surfac
 
     for script_name in obsolete_scripts:
         assert not (scripts_dir / script_name).exists()
+
+
+def test_root_submission_structure_excludes_research_only_directories() -> None:
+    assert not (PROJECT_ROOT / "experiments").exists()
+    assert not (PROJECT_ROOT / "trivia-qa").exists()
+    assert not (PROJECT_ROOT / "src" / "api").exists()
+    assert (PROJECT_ROOT / "data" / "bench" / "knowledge_bench_public.csv").exists()

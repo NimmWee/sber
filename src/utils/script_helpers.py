@@ -50,6 +50,10 @@ def resolve_public_benchmark_path(
     if root_candidate.exists():
         return root_candidate
 
+    bench_candidate = project_root_path / "data" / "bench" / "knowledge_bench_public.csv"
+    if bench_candidate.exists():
+        return bench_candidate
+
     data_candidate = project_root_path / "data" / "knowledge_bench_public.csv"
     if data_candidate.exists():
         return data_candidate

@@ -215,10 +215,10 @@ def test_resolve_public_benchmark_path_prefers_explicit_path(tmp_path) -> None:
     assert resolved == explicit_path
 
 
-def test_resolve_public_benchmark_path_falls_back_to_project_root_file(tmp_path) -> None:
+def test_resolve_public_benchmark_path_prefers_bench_file(tmp_path) -> None:
     project_root = tmp_path / "project"
-    project_root.mkdir()
-    dataset_path = project_root / "knowledge_bench_public.csv"
+    dataset_path = project_root / "data" / "bench" / "knowledge_bench_public.csv"
+    dataset_path.parent.mkdir(parents=True)
     dataset_path.write_text("prompt,model_answer,is_hallucination\n", encoding="utf-8")
 
     resolved = resolve_public_benchmark_path(project_root=project_root)

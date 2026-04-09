@@ -46,6 +46,7 @@ The repository preserves:
 
 The preview benchmark is for evaluation only and is not used as training data.
 It is referenced only for overlap and leakage checks during dataset construction.
+The committed public preview file lives at `data/bench/knowledge_bench_public.csv`.
 
 ## Reproducible Commands
 
@@ -89,6 +90,10 @@ Frozen submission config:
 
 - `configs/` runtime and frozen-submission configuration
 - `data/bench/` private benchmark input/output location
+- `data/bench/` benchmark CSVs:
+  - `knowledge_bench_public.csv` for evaluation-only overlap checks
+  - `knowledge_bench_private.csv` as submission input
+  - `knowledge_bench_private_scores.csv` as submission output
 - `data/` text-based seed data and processed datasets
 - `model/frozen_best/` frozen submission artifacts
 - `src/submission/` final frozen submission code
