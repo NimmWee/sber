@@ -48,6 +48,12 @@ def train_frozen_best_submission(
     token_stat_provider,
     artifact_dir: str | Path,
 ) -> dict[str, Any]:
+    dataset_root = Path(dataset_path)
+    if not dataset_root.exists():
+        raise FileNotFoundError(
+            "textual training dataset was not found. "
+            "Run `python scripts/build_text_training_dataset.py` first or pass --dataset-path."
+        )
     examples = load_textual_training_dataset(dataset_path)
     train_examples = [example for example in examples if example.split == "train"]
     dev_examples = [example for example in examples if example.split == "dev"]
@@ -132,6 +138,19 @@ def train_frozen_best_submission(
 
 def load_frozen_submission_bundle(artifact_dir: str | Path) -> FrozenSubmissionBundle:
     artifact_root = Path(artifact_dir)
+    required_artifacts = [
+        artifact_root / "baseline_head.json",
+        artifact_root / "numeric_specialist_head.json",
+        artifact_root / "entity_specialist_head.json",
+        artifact_root / "long_specialist_head.json",
+    ]
+    missing_artifacts = [str(path) for path in required_artifacts if not path.exists()]
+    if missing_artifacts:
+        raise FileNotFoundError(
+            "frozen submission artifacts were not found. "
+            "Run `bash scripts/train.sh --config configs/token_stat_provider.local.json` first. "
+            f"Missing: {', '.join(missing_artifacts)}"
+        )
     metadata = build_frozen_best_metadata()
     metadata_path = artifact_root / "frozen_submission_metadata.json"
     if metadata_path.exists():
@@ -155,13 +174,19 @@ def score_private_frozen_submission(
     bundle: FrozenSubmissionBundle | None = None,
     artifact_dir: str | Path | None = None,
 ) -> dict[str, Any]:
+    input_csv_path = Path(input_path)
+    if not input_csv_path.exists():
+        raise FileNotFoundError(
+            "knowledge_bench_private.csv was not found. "
+            "Place the private benchmark at data/bench/knowledge_bench_private.csv "
+            "or pass --input-path explicitly."
+        )
     if bundle is None:
         if artifact_dir is None:
             raise ValueError("artifact_dir is required when bundle is not provided")
         bundle = load_frozen_submission_bundle(artifact_dir)
 
     extractor = _build_frozen_best_extractor()
-    input_csv_path = Path(input_path)
     output_csv_path = Path(output_path)
     output_csv_path.parent.mkdir(parents=True, exist_ok=True)
 

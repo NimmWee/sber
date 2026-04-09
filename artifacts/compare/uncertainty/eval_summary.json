@@ -1,6 +1,0 @@
-{
-  "pr_auc": 0.8333333333333333,
-  "sample_size": 4,
-  "model_artifact_path": "C:\\sber\\artifacts\\compare\\uncertainty\\logistic_head.json",
-  "summary_artifact_path": "C:\\sber\\artifacts\\compare\\uncertainty\\eval_summary.json"
-}

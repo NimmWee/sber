@@ -9,7 +9,7 @@ The frozen final submission candidate is the exact historical best-performing bu
 - frozen variant: `baseline_plus_all_specialists`
 - historical public PR-AUC: `0.6881`
 
-This repository now treats that build as the active submission path.
+This repository now treats that build as the only active submission path.
 
 ## Method Summary
 
@@ -45,6 +45,7 @@ The repository preserves:
 - frozen submission training/scoring code in `src/submission/frozen_best.py`
 
 The preview benchmark is for evaluation only and is not used as training data.
+It is referenced only for overlap and leakage checks during dataset construction.
 
 ## Reproducible Commands
 
@@ -92,10 +93,22 @@ Frozen submission config:
 - `model/frozen_best/` frozen submission artifacts
 - `src/submission/` final frozen submission code
 - `scripts/` install, train, score, and utility entrypoints
+- `scripts/` active executable surface:
+  - `install.sh`
+  - `train.sh`
+  - `score_private.sh`
+  - `build_text_training_dataset.py`
+  - `preprocess_text_training_dataset.py`
+  - `train_frozen_submission.py`
+  - `score_frozen_submission.py`
 - `notebooks/` optional analysis notebooks
 
 ## Reproducibility Notes
 
 - The active submission path is frozen to the historical best specialist blend.
-- Later degraded experiments remain in the repository for auditability, but the shell scripts and final submission path point only to the frozen build.
 - Runtime scoring does not use external APIs, retrieval, or multi-pass generation.
+- `scripts/install.sh` prepares directories but does not create private benchmark inputs.
+- Manual setup is required for:
+  - `data/bench/knowledge_bench_private.csv`
+  - `configs/token_stat_provider.local.json` pointing to the local GigaChat checkpoint
+- If the textual training dataset has not been built yet, `scripts/train.sh` rebuilds it from the committed public seed inputs.

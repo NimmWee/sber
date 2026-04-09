@@ -105,3 +105,69 @@ def test_score_frozen_submission_script_prints_output(monkeypatch, tmp_path, cap
     assert "model=/kaggle/temp/GigaChat3" in output
     assert "sample_size=3" in output
     assert "output=" in output
+
+
+def test_train_frozen_submission_script_fails_with_actionable_message_for_missing_dataset(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    module = _load_script_module("train_frozen_submission.py")
+    dataset_path = tmp_path / "missing.jsonl"
+    artifact_dir = tmp_path / "frozen_best"
+
+    class FakeConfig:
+        model_source = "/kaggle/temp/GigaChat3"
+
+    monkeypatch.setattr(module, "resolve_transformers_provider_config", lambda **_: FakeConfig())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "train_frozen_submission.py",
+            "--dataset-path",
+            str(dataset_path),
+            "--artifact-dir",
+            str(artifact_dir),
+        ],
+    )
+
+    try:
+        module.main()
+    except FileNotFoundError as error:
+        assert "textual training dataset was not found" in str(error)
+        assert "build_text_training_dataset.py" in str(error)
+    else:
+        raise AssertionError("expected FileNotFoundError for missing training dataset")
+
+
+def test_score_frozen_submission_script_fails_with_actionable_message_for_missing_private_csv(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    module = _load_script_module("score_frozen_submission.py")
+    input_path = tmp_path / "missing_private.csv"
+    artifact_dir = tmp_path / "frozen_best"
+
+    class FakeConfig:
+        model_source = "/kaggle/temp/GigaChat3"
+
+    monkeypatch.setattr(module, "resolve_transformers_provider_config", lambda **_: FakeConfig())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "score_frozen_submission.py",
+            "--input-path",
+            str(input_path),
+            "--artifact-dir",
+            str(artifact_dir),
+        ],
+    )
+
+    try:
+        module.main()
+    except FileNotFoundError as error:
+        assert "knowledge_bench_private.csv was not found" in str(error)
+        assert "data/bench/knowledge_bench_private.csv" in str(error)
+    else:
+        raise AssertionError("expected FileNotFoundError for missing private benchmark input")
