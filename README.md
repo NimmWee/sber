@@ -1,180 +1,112 @@
-# Детектор фактических галлюцинаций
+# Детектор фактологических галлюцинаций
 
-Этот репозиторий содержит финальную submission-версию решения для хакатона Sber.
+Этот репозиторий содержит финальный минимальный pipeline для задачи детекции фактологических галлюцинаций по паре:
 
-Модель получает на вход:
 - `prompt`
 - `response`
 
-На выходе возвращается:
-- `hallucination_probability` в диапазоне `[0, 1]`
+Модель возвращает:
+
+- основной выход: `hallucination_probability` в диапазоне `[0, 1]`
+- при необходимости сервисный бинарный режим через порог `0.3`
 
 Финальный замороженный вариант:
+
 - historical best commit: `d3fa946`
 - variant: `baseline_plus_all_specialists`
 - historical PR-AUC: `0.6881`
 
-Сейчас именно этот путь является активным submission path.
+## Как устроено решение
 
-## Что лежит в репозитории
+Runtime path остаётся лёгким:
 
-- `configs/` — конфиги модели и frozen submission
-- `data/bench/` — benchmark CSV-файлы
-- `data/public_seed_facts.jsonl` — публичные текстовые seed-данные
-- `model/frozen_best/` — артефакты обученной финальной модели
-- `src/` — код извлечения признаков, инференса, подготовки данных и frozen scoring path
-- `scripts/` — основные команды запуска
-- `notebooks/` — пустая директория под ноутбуки, если понадобится
+1. локальный GigaChat-like checkpoint
+2. один проход по `prompt + response`
+3. извлечение uncertainty / structural / internal features
+4. лёгкие scorer-ы:
+   - baseline
+   - numeric
+   - entity
+   - long-response
+5. фиксированный weighted blend
 
-## Важное ограничение
+В runtime path:
 
-В runtime scoring path:
-- не используются внешние API
-- не используется retrieval / RAG
+- нет внешних API
+- нет retrieval / RAG
+- нет judge pipeline
 - не генерируются новые ответы
-- скоринг работает только по готовым парам `prompt + response`
 
-## Откуда берутся данные для обучения
+## Что нужно для работы
 
-Репозиторий не зависит от анонимных матриц признаков.
+### 1. Конфиг модели
 
-Для воспроизводимости сохранены:
-- текстовые seed-данные: `data/public_seed_facts.jsonl`
-- код сборки текстового датасета: `src/data/textual_dataset.py`
-- код препроцессинга текста в признаки: `src/data/textual_preprocessing.py`
-- скрипт сборки датасета: `scripts/build_text_training_dataset.py`
+Нужно указать путь к локальному checkpoint:
 
-Публичный preview benchmark:
-- `data/bench/knowledge_bench_public.csv`
-- используется только для evaluation-only overlap checks
-- не используется как train data
+- локально: `configs/token_stat_provider.local.json`
+- в Kaggle: `configs/token_stat_provider.kaggle.json`
 
-## Что нужно положить вручную
+### 2. Данные для обучения
 
-Перед обучением и скорингом нужно:
+Для воспроизводимого train path в репозитории уже есть:
 
-1. Указать локальный путь к GigaChat checkpoint в:
-   - `configs/token_stat_provider.local.json`
+- `data/public_seed_facts.jsonl` — текстовые seed-данные
+- `data/bench/knowledge_bench_public.csv` — только для overlap-check, не для обучения
 
-2. Для финального скоринга положить private benchmark в:
-   - `data/bench/knowledge_bench_private.csv`
+### 3. Данные для scoring
 
-Если этих файлов нет, train/score path должен падать с понятным сообщением.
+Для private scoring нужен CSV:
 
-## Ожидаемый формат private benchmark
-
-Входной файл:
 - `data/bench/knowledge_bench_private.csv`
 
 Ожидаемые колонки:
+
 - `prompt`
 - `response`
 
-Выходной файл:
-- `data/bench/knowledge_bench_private_scores.csv`
+## Структура репозитория
 
-Колонки в выходе:
-- `prompt`
-- `response`
-- `hallucination_probability`
+- `configs/` — конфиги модели
+- `data/` — текстовые seed-данные и benchmark-файлы
+- `model/` — артефакты обученной модели
+- `src/` — основной код
+- `scripts/` — команды запуска
+- `notebooks/` — пустая директория под ноутбуки
 
-## Быстрый запуск из корня репозитория
+## Основные команды
 
-Все команды ниже предполагают, что текущая директория — корень репозитория.
+Все команды ниже запускаются из корня репозитория.
 
-### 1. Установка
-
-```bash
-bash scripts/install.sh
-```
-
-Если в shell нет команды `python`, но есть другой интерпретатор, можно явно передать его:
-
-```bash
-export PYTHON_BIN=/path/to/python
-bash scripts/install.sh
-```
-
-### 2. Обучение финального frozen path
-
-```bash
-bash scripts/train.sh --config configs/token_stat_provider.local.json
-```
-
-Эта команда:
-- использует committed text-based inputs
-- собирает текстовый train dataset
-- обучает frozen final path
-- сохраняет артефакты в `model/frozen_best/`
-
-### 3. Скоринг private benchmark
-
-```bash
-bash scripts/score_private.sh --config configs/token_stat_provider.local.json
-```
-
-По умолчанию скрипт:
-- читает `data/bench/knowledge_bench_private.csv`
-- пишет `data/bench/knowledge_bench_private_scores.csv`
-
-Если нужно передать пути явно:
-
-```bash
-bash scripts/score_private.sh \
-  --config configs/token_stat_provider.local.json \
-  --input-path data/bench/knowledge_bench_private.csv \
-  --artifact-dir model/frozen_best \
-  --output-path data/bench/knowledge_bench_private_scores.csv
-```
-
-## Быстрый запуск в Kaggle
-
-В репозитории уже есть готовый committed config для Kaggle:
-- `configs/token_stat_provider.kaggle.json`
-
-Если private файл называется `knowledge_bench_private_no_labels.csv`, то из корня репозитория в Kaggle можно запускать так:
+### Установка
 
 ```bash
 bash scripts/install.sh
-bash scripts/train.sh --config configs/token_stat_provider.kaggle.json
-bash scripts/score_private.sh \
-  --config configs/token_stat_provider.kaggle.json \
-  --input-path /kaggle/input/<YOUR_DATASET_NAME>/knowledge_bench_private_no_labels.csv \
-  --output-path data/bench/knowledge_bench_private_scores.csv
-```
-
-Если в kaggle shell нет `python`, но есть `python3`, можно явно указать интерпретатор:
-
-```bash
-export PYTHON_BIN=python3
-bash scripts/install.sh
-bash scripts/train.sh --config configs/token_stat_provider.kaggle.json
-bash scripts/score_private.sh \
-  --config configs/token_stat_provider.kaggle.json \
-  --input-path /kaggle/input/<YOUR_DATASET_NAME>/knowledge_bench_private_no_labels.csv \
-  --output-path data/bench/knowledge_bench_private_scores.csv
-```
-
-## Прямые Python entrypoints
-
-Если удобнее запускать без shell-обёрток:
-
-### Сборка текстового датасета
-
-```bash
-python scripts/build_text_training_dataset.py
 ```
 
 ### Обучение
 
 ```bash
-python scripts/train_frozen_submission.py \
-  --config configs/token_stat_provider.local.json \
-  --dataset-path data/processed/textual_training_dataset.jsonl \
-  --artifact-dir model/frozen_best
+bash scripts/train.sh --config configs/token_stat_provider.local.json
 ```
 
-### Скоринг
+Что делает `train.sh`:
+
+1. собирает текстовый train dataset
+2. обучает frozen final path
+3. сохраняет артефакты в `model/frozen_best/`
+
+### Скоринг private benchmark
+
+```bash
+bash scripts/score_private.sh --config configs/token_stat_provider.local.json
+```
+
+По умолчанию:
+
+- вход: `data/bench/knowledge_bench_private.csv`
+- выход: `data/bench/knowledge_bench_private_scores.csv`
+
+### Явный скоринг через Python
 
 ```bash
 python scripts/score_frozen_submission.py \
@@ -184,24 +116,71 @@ python scripts/score_frozen_submission.py \
   --output-path data/bench/knowledge_bench_private_scores.csv
 ```
 
-## Активные скрипты
+## Формат результата
 
-В финальной структуре используются только:
+Выходной CSV содержит:
+
+- `prompt`
+- `response`
+- `hallucination_probability`
+
+Если нужен бинарный сервисный режим, используй порог `0.3` уже после получения вероятностей.
+
+Пример:
+
+```python
+hallucination = hallucination_probability >= 0.3
+```
+
+Где:
+
+- `true` — галлюцинация есть
+- `false` — галлюцинации нет
+
+Важно:
+
+- основной output проекта — именно probability
+- boolean режим вторичен и зависит от выбранного operational threshold
+
+## Запуск в Kaggle
+
+Если репозиторий расположен в:
+
+- `/kaggle/working/sber`
+
+и checkpoint доступен локально, то рабочий сценарий такой:
+
+```bash
+cd /kaggle/working/sber
+
+bash scripts/install.sh
+
+bash scripts/train.sh --config configs/token_stat_provider.kaggle.json
+
+bash scripts/score_private.sh \
+  --config configs/token_stat_provider.kaggle.json \
+  --input-path /kaggle/input/YOUR_DATASET_NAME/knowledge_bench_private.csv \
+  --output-path /kaggle/working/sber/data/bench/knowledge_bench_private_scores.csv
+```
+
+## Активные файлы запуска
+
+В рабочем минимальном варианте используются:
+
 - `scripts/install.sh`
 - `scripts/train.sh`
 - `scripts/score_private.sh`
 - `scripts/build_text_training_dataset.py`
-- `scripts/preprocess_text_training_dataset.py`
 - `scripts/train_frozen_submission.py`
 - `scripts/score_frozen_submission.py`
 
-## Итог
+## Коротко
 
-Если коротко, для воспроизведения решения нужно:
+Чтобы воспроизвести решение:
 
-1. Настроить `configs/token_stat_provider.local.json`
-2. Положить `data/bench/knowledge_bench_private.csv`
-3. Выполнить:
+1. настрой путь к checkpoint в config
+2. положи private CSV в `data/bench/knowledge_bench_private.csv`
+3. выполни:
 
 ```bash
 bash scripts/install.sh
@@ -209,5 +188,6 @@ bash scripts/train.sh --config configs/token_stat_provider.local.json
 bash scripts/score_private.sh --config configs/token_stat_provider.local.json
 ```
 
-После этого появится:
+Итоговый результат появится в:
+
 - `data/bench/knowledge_bench_private_scores.csv`
