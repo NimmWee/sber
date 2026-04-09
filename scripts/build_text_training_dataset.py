@@ -17,19 +17,12 @@ from utils.script_helpers import resolve_public_benchmark_path, resolve_text_tra
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Build the reproducible text-based training dataset from committed public seeds."
-    )
-    parser.add_argument("--seed-path", default=None, help="Path to public seed JSONL.")
-    parser.add_argument(
-        "--public-benchmark-path",
-        default=None,
-        help="Public benchmark CSV used only for overlap checks, never for fit.",
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed-path", default=None)
+    parser.add_argument("--public-benchmark-path", default=None)
     parser.add_argument(
         "--output-path",
         default=str(PROJECT_ROOT / "data" / "processed" / "textual_training_dataset.jsonl"),
-        help="Destination JSONL path for the generated train/dev dataset.",
     )
     args = parser.parse_args()
 

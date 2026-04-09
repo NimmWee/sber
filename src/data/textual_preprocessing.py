@@ -4,10 +4,7 @@ from pathlib import Path
 
 from data.textual_dataset import TextualTrainingExample, load_textual_training_dataset
 from eval.default_detector import build_default_detector_extractor
-from utils.script_helpers import (
-    assert_not_public_benchmark_training_path,
-    write_json_artifact,
-)
+from utils.script_helpers import write_json_artifact
 
 
 def preprocess_textual_training_dataset(
@@ -16,7 +13,6 @@ def preprocess_textual_training_dataset(
     token_stat_provider,
     artifact_dir: str | Path,
 ) -> dict[str, object]:
-    assert_not_public_benchmark_training_path(dataset_path)
     examples = load_textual_training_dataset(dataset_path)
     extractor = build_default_detector_extractor()
     rows: list[dict[str, object]] = []

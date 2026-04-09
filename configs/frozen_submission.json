@@ -2,12 +2,6 @@
   "historical_best_commit": "d3fa946",
   "historical_best_variant": "baseline_plus_all_specialists",
   "historical_best_pr_auc": 0.6881,
-  "primary_output_mode": "probability",
-  "serving_threshold": 0.3,
-  "serving_threshold_source": "fixed serving threshold for optional boolean mode; not used for PR-AUC optimization",
-  "blend_version": "baseline_plus_all_specialists_v1",
-  "blend_weight_source": "frozen historical submission blend, preserved for reproducibility and not re-tuned in this repo",
-  "random_seed": 0,
   "blend_weights": {
     "baseline": 0.55,
     "numeric": 0.15,

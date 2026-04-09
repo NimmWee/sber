@@ -2,7 +2,6 @@
 __pycache__/
 *.pyc
 artifacts/
-reports/
 data/bench/*.csv
 data/processed/
 data/textual/

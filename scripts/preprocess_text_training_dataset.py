@@ -17,19 +17,15 @@ from utils.script_helpers import resolve_transformers_provider_config
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Preprocess the text-based train/dev dataset into feature rows using the local provider."
-    )
-    parser.add_argument("--config", default=None, help="Path to provider config JSON.")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default=None)
     parser.add_argument(
         "--dataset-path",
         default=str(PROJECT_ROOT / "data" / "processed" / "textual_training_dataset.jsonl"),
-        help="Path to the processed text-based training dataset JSONL.",
     )
     parser.add_argument(
         "--artifact-dir",
         default=str(PROJECT_ROOT / "artifacts" / "textual_training_preprocessed"),
-        help="Directory where the preprocessed dataset artifact will be written.",
     )
     args = parser.parse_args()
 

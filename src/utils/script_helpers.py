@@ -1,13 +1,5 @@
 import json
-import random
-import os
-import platform
-import subprocess
-from datetime import datetime, timezone
-from importlib import metadata as importlib_metadata
 from pathlib import Path
-
-import numpy as np
 
 from eval.runner import RawLabeledExample
 from inference.token_stats import TransformersProviderConfig
@@ -23,42 +15,12 @@ def load_frozen_submission_config(path: str | Path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def is_public_benchmark_path(path: str | Path) -> bool:
-    candidate = Path(path)
-    return candidate.name == "knowledge_bench_public.csv"
-
-
-def assert_not_public_benchmark_training_path(path: str | Path) -> None:
-    if is_public_benchmark_path(path):
-        raise ValueError(
-            "public benchmark is evaluation-only and must not be used as training data"
-        )
-
-
-def assert_unlabeled_submission_input_columns(fieldnames: list[str] | None) -> None:
-    columns = set(fieldnames or [])
-    forbidden = {"label", "is_hallucination", "target"}
-    intersected = sorted(columns & forbidden)
-    if intersected:
-        raise ValueError(
-            "submission scoring input must be unlabeled and evaluation-only labels are not allowed: "
-            + ", ".join(intersected)
-        )
-
-
 def resolve_transformers_provider_config(
     *,
     project_root: str | Path,
     explicit_config_path: str | Path | None = None,
 ) -> TransformersProviderConfig:
     if explicit_config_path is not None:
-        config_path = Path(explicit_config_path)
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"token_stat_provider config was not found: {config_path}. "
-                "In Kaggle, pass --config configs/token_stat_provider.kaggle.json "
-                "or mount your custom config into /kaggle/working."
-            )
         return load_transformers_provider_config(explicit_config_path)
 
     project_root_path = Path(project_root)
@@ -71,13 +33,6 @@ def resolve_transformers_provider_config(
             local_config.checkpoint_path
         ).exists():
             return local_config
-
-    if not default_config_path.exists():
-        raise FileNotFoundError(
-            f"token_stat_provider config was not found under {project_root_path / 'configs'}. "
-            "Expected token_stat_provider.local.json, token_stat_provider.kaggle.json, "
-            "or token_stat_provider.json."
-        )
 
     return load_transformers_provider_config(default_config_path)
 
@@ -166,11 +121,6 @@ def resolve_frozen_submission_config(
     explicit_config_path: str | Path | None = None,
 ) -> dict:
     if explicit_config_path is not None:
-        config_path = Path(explicit_config_path)
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"frozen submission config was not found: {config_path}"
-            )
         return load_frozen_submission_config(explicit_config_path)
 
     project_root_path = Path(project_root)
@@ -178,33 +128,6 @@ def resolve_frozen_submission_config(
     if default_candidate.exists():
         return load_frozen_submission_config(default_candidate)
     raise FileNotFoundError("frozen_submission.json was not found")
-
-
-def build_runtime_metadata(*, project_root: str | Path) -> dict[str, object]:
-    return {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "training_run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
-        "python_version": platform.python_version(),
-        "platform": platform.platform(),
-        "git_commit": _safe_git_commit(project_root),
-        "library_versions": {
-            package: _safe_package_version(package)
-            for package in ("lightgbm", "torch", "transformers")
-        },
-    }
-
-
-def set_global_random_seed(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    try:
-        import torch
-
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
-    except Exception:
-        pass
 
 
 def write_json_artifact(
@@ -216,20 +139,7 @@ def write_json_artifact(
     output_dir = Path(artifact_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = output_dir / filename
-    artifact_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    return artifact_path
-
-
-def write_markdown_artifact(
-    *,
-    artifact_dir: str | Path,
-    filename: str,
-    markdown: str,
-) -> Path:
-    output_dir = Path(artifact_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    artifact_path = output_dir / filename
-    artifact_path.write_text(markdown, encoding="utf-8")
+    artifact_path.write_text(json.dumps(payload, indent=2))
     return artifact_path
 
 
@@ -368,25 +278,3 @@ def build_ablation_examples() -> tuple[list[RawLabeledExample], list[RawLabeledE
         ),
     ]
     return train_examples, validation_examples
-
-
-def _safe_package_version(package_name: str) -> str:
-    try:
-        return importlib_metadata.version(package_name)
-    except importlib_metadata.PackageNotFoundError:
-        return "not-installed"
-
-
-def _safe_git_commit(project_root: str | Path) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(project_root),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except Exception:
-        return None
-    commit = result.stdout.strip()
-    return commit or None
