@@ -1,119 +1,185 @@
-# sber
+# Детектор фактических галлюцинаций
 
-Production-grade factual hallucination detector for the Sber hackathon.
+Этот репозиторий содержит финальную submission-версию решения для хакатона Sber.
 
-## Frozen Submission Candidate
+Модель получает на вход:
+- `prompt`
+- `response`
 
-The frozen final submission candidate is the exact historical best-performing build:
+На выходе возвращается:
+- `hallucination_probability` в диапазоне `[0, 1]`
+
+Финальный замороженный вариант:
 - historical best commit: `d3fa946`
-- frozen variant: `baseline_plus_all_specialists`
-- historical public PR-AUC: `0.6881`
+- variant: `baseline_plus_all_specialists`
+- historical PR-AUC: `0.6881`
 
-This repository now treats that build as the only active submission path.
+Сейчас именно этот путь является активным submission path.
 
-## Method Summary
+## Что лежит в репозитории
 
-Input:
-- `prompt + response`
+- `configs/` — конфиги модели и frozen submission
+- `data/bench/` — benchmark CSV-файлы
+- `data/public_seed_facts.jsonl` — публичные текстовые seed-данные
+- `model/frozen_best/` — артефакты обученной финальной модели
+- `src/` — код извлечения признаков, инференса, подготовки данных и frozen scoring path
+- `scripts/` — основные команды запуска
+- `notebooks/` — пустая директория под ноутбуки, если понадобится
 
-Runtime scoring path:
-- one forward pass of local GigaChat on `prompt + delimiter + response`
-- structural features
-- base token uncertainty
-- compact internal features
-- lightweight specialist scorers:
-  - numeric
-  - entity-like
-  - long-response
-- frozen weighted blend:
-  - baseline `0.55`
-  - numeric specialist `0.15`
-  - entity specialist `0.15`
-  - long specialist `0.15`
+## Важное ограничение
 
-Output:
-- `hallucination_probability` in `[0, 1]`
+В runtime scoring path:
+- не используются внешние API
+- не используется retrieval / RAG
+- не генерируются новые ответы
+- скоринг работает только по готовым парам `prompt + response`
 
-## Dataset And Provenance
+## Откуда берутся данные для обучения
 
-Training data is text-based and auditable.
+Репозиторий не зависит от анонимных матриц признаков.
 
-The repository preserves:
-- public factual seeds in `data/public_seed_facts.jsonl`
-- textual dataset builder in `src/data/textual_dataset.py`
-- feature reconstruction from text in `src/data/textual_preprocessing.py`
-- frozen submission training/scoring code in `src/submission/frozen_best.py`
+Для воспроизводимости сохранены:
+- текстовые seed-данные: `data/public_seed_facts.jsonl`
+- код сборки текстового датасета: `src/data/textual_dataset.py`
+- код препроцессинга текста в признаки: `src/data/textual_preprocessing.py`
+- скрипт сборки датасета: `scripts/build_text_training_dataset.py`
 
-The preview benchmark is for evaluation only and is not used as training data.
-It is referenced only for overlap and leakage checks during dataset construction.
-The committed public preview file lives at `data/bench/knowledge_bench_public.csv`.
+Публичный preview benchmark:
+- `data/bench/knowledge_bench_public.csv`
+- используется только для evaluation-only overlap checks
+- не используется как train data
 
-## Reproducible Commands
+## Что нужно положить вручную
 
-Install:
+Перед обучением и скорингом нужно:
+
+1. Указать локальный путь к GigaChat checkpoint в:
+   - `configs/token_stat_provider.local.json`
+
+2. Для финального скоринга положить private benchmark в:
+   - `data/bench/knowledge_bench_private.csv`
+
+Если этих файлов нет, train/score path должен падать с понятным сообщением.
+
+## Ожидаемый формат private benchmark
+
+Входной файл:
+- `data/bench/knowledge_bench_private.csv`
+
+Ожидаемые колонки:
+- `prompt`
+- `response`
+
+Выходной файл:
+- `data/bench/knowledge_bench_private_scores.csv`
+
+Колонки в выходе:
+- `prompt`
+- `response`
+- `hallucination_probability`
+
+## Быстрый запуск из корня репозитория
+
+Все команды ниже предполагают, что текущая директория — корень репозитория.
+
+### 1. Установка
+
 ```bash
 bash scripts/install.sh
 ```
 
-Train the frozen submission candidate:
+Если в shell нет команды `python`, но есть другой интерпретатор, можно явно передать его:
+
+```bash
+export PYTHON_BIN=/path/to/python
+bash scripts/install.sh
+```
+
+### 2. Обучение финального frozen path
+
 ```bash
 bash scripts/train.sh --config configs/token_stat_provider.local.json
 ```
 
-Score the private benchmark:
+Эта команда:
+- использует committed text-based inputs
+- собирает текстовый train dataset
+- обучает frozen final path
+- сохраняет артефакты в `model/frozen_best/`
+
+### 3. Скоринг private benchmark
+
 ```bash
 bash scripts/score_private.sh --config configs/token_stat_provider.local.json
 ```
 
-Explicit Python entrypoints:
+По умолчанию скрипт:
+- читает `data/bench/knowledge_bench_private.csv`
+- пишет `data/bench/knowledge_bench_private_scores.csv`
+
+Если нужно передать пути явно:
+
 ```bash
-python scripts/build_text_training_dataset.py
-python scripts/train_frozen_submission.py --config configs/token_stat_provider.local.json --dataset-path data/processed/textual_training_dataset.jsonl --artifact-dir model/frozen_best
-python scripts/score_frozen_submission.py --config configs/token_stat_provider.local.json --input-path data/bench/knowledge_bench_private.csv --artifact-dir model/frozen_best --output-path data/bench/knowledge_bench_private_scores.csv
+bash scripts/score_private.sh \
+  --config configs/token_stat_provider.local.json \
+  --input-path data/bench/knowledge_bench_private.csv \
+  --artifact-dir model/frozen_best \
+  --output-path data/bench/knowledge_bench_private_scores.csv
 ```
 
-## Expected Files
+## Прямые Python entrypoints
 
-Private scoring input:
-- `data/bench/knowledge_bench_private.csv`
+Если удобнее запускать без shell-обёрток:
 
-Private scoring output:
+### Сборка текстового датасета
+
+```bash
+python scripts/build_text_training_dataset.py
+```
+
+### Обучение
+
+```bash
+python scripts/train_frozen_submission.py \
+  --config configs/token_stat_provider.local.json \
+  --dataset-path data/processed/textual_training_dataset.jsonl \
+  --artifact-dir model/frozen_best
+```
+
+### Скоринг
+
+```bash
+python scripts/score_frozen_submission.py \
+  --config configs/token_stat_provider.local.json \
+  --input-path data/bench/knowledge_bench_private.csv \
+  --artifact-dir model/frozen_best \
+  --output-path data/bench/knowledge_bench_private_scores.csv
+```
+
+## Активные скрипты
+
+В финальной структуре используются только:
+- `scripts/install.sh`
+- `scripts/train.sh`
+- `scripts/score_private.sh`
+- `scripts/build_text_training_dataset.py`
+- `scripts/preprocess_text_training_dataset.py`
+- `scripts/train_frozen_submission.py`
+- `scripts/score_frozen_submission.py`
+
+## Итог
+
+Если коротко, для воспроизведения решения нужно:
+
+1. Настроить `configs/token_stat_provider.local.json`
+2. Положить `data/bench/knowledge_bench_private.csv`
+3. Выполнить:
+
+```bash
+bash scripts/install.sh
+bash scripts/train.sh --config configs/token_stat_provider.local.json
+bash scripts/score_private.sh --config configs/token_stat_provider.local.json
+```
+
+После этого появится:
 - `data/bench/knowledge_bench_private_scores.csv`
-
-Frozen model artifacts:
-- `model/frozen_best/`
-
-Frozen submission config:
-- `configs/frozen_submission.json`
-
-## Repository Layout
-
-- `configs/` runtime and frozen-submission configuration
-- `data/bench/` private benchmark input/output location
-- `data/bench/` benchmark CSVs:
-  - `knowledge_bench_public.csv` for evaluation-only overlap checks
-  - `knowledge_bench_private.csv` as submission input
-  - `knowledge_bench_private_scores.csv` as submission output
-- `data/` text-based seed data and processed datasets
-- `model/frozen_best/` frozen submission artifacts
-- `src/submission/` final frozen submission code
-- `scripts/` install, train, score, and utility entrypoints
-- `scripts/` active executable surface:
-  - `install.sh`
-  - `train.sh`
-  - `score_private.sh`
-  - `build_text_training_dataset.py`
-  - `preprocess_text_training_dataset.py`
-  - `train_frozen_submission.py`
-  - `score_frozen_submission.py`
-- `notebooks/` optional analysis notebooks
-
-## Reproducibility Notes
-
-- The active submission path is frozen to the historical best specialist blend.
-- Runtime scoring does not use external APIs, retrieval, or multi-pass generation.
-- `scripts/install.sh` prepares directories but does not create private benchmark inputs.
-- Manual setup is required for:
-  - `data/bench/knowledge_bench_private.csv`
-  - `configs/token_stat_provider.local.json` pointing to the local GigaChat checkpoint
-- If the textual training dataset has not been built yet, `scripts/train.sh` rebuilds it from the committed public seed inputs.
