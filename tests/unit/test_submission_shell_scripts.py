@@ -31,6 +31,20 @@ def test_install_shell_script_prints_manual_data_placement_steps() -> None:
     assert "token_stat_provider.local.json" in content
 
 
+def test_submission_shell_scripts_support_python3_when_python_is_missing() -> None:
+    for script_name in ["install.sh", "train.sh", "score_private.sh"]:
+        content = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+        assert "command -v python3" in content or "PYTHON_BIN" in content
+
+
+def test_submission_shell_scripts_allow_explicit_python_bin_override() -> None:
+    for script_name in ["install.sh", "train.sh", "score_private.sh"]:
+        content = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+        assert 'PYTHON_BIN="${PYTHON_BIN:-}"' in content
+
+
 def test_gitignore_excludes_local_submission_clutter() -> None:
     content = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
 
