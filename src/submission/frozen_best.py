@@ -10,7 +10,13 @@ from eval.default_detector import DEFAULT_TOKEN_FEATURE_GROUPS
 from eval.metrics import compute_pr_auc
 from features.extractor import InternalModelSignal, StructuralFeatureExtractor, TokenUncertaintyStat
 from models.head import TrainedLightGBMHead, train_lightgbm_head
-from utils.script_helpers import write_json_artifact
+from utils.script_helpers import (
+    assert_not_public_benchmark_training_path,
+    assert_unlabeled_submission_input_columns,
+    build_runtime_metadata,
+    write_json_artifact,
+    write_markdown_artifact,
+)
 
 
 HISTORICAL_BEST_COMMIT = "d3fa946"
@@ -22,6 +28,14 @@ FROZEN_BLEND_WEIGHTS = {
     "entity": 0.15,
     "long": 0.15,
 }
+FROZEN_BLEND_VERSION = "baseline_plus_all_specialists_v1"
+FROZEN_BLEND_WEIGHT_SOURCE = (
+    "frozen historical submission blend, preserved for reproducibility and not re-tuned in this repo"
+)
+DEFAULT_SERVING_THRESHOLD = 0.3
+SERVING_THRESHOLD_SOURCE = (
+    "fixed serving threshold for optional boolean mode; not used for PR-AUC optimization"
+)
 
 
 @dataclass(frozen=True)
@@ -33,13 +47,22 @@ class FrozenSubmissionBundle:
     metadata: dict[str, Any]
 
 
-def build_frozen_best_metadata() -> dict[str, Any]:
-    return {
+def build_frozen_best_metadata(*, project_root: str | Path | None = None) -> dict[str, Any]:
+    metadata = {
         "historical_best_commit": HISTORICAL_BEST_COMMIT,
         "historical_best_variant": HISTORICAL_BEST_VARIANT,
         "historical_best_pr_auc": HISTORICAL_BEST_PR_AUC,
         "blend_weights": dict(FROZEN_BLEND_WEIGHTS),
+        "blend_version": FROZEN_BLEND_VERSION,
+        "blend_weight_source": FROZEN_BLEND_WEIGHT_SOURCE,
+        "primary_output_mode": "probability",
+        "serving_threshold": DEFAULT_SERVING_THRESHOLD,
+        "serving_threshold_source": SERVING_THRESHOLD_SOURCE,
+        "random_seed": 0,
     }
+    if project_root is not None:
+        metadata["runtime"] = build_runtime_metadata(project_root=project_root)
+    return metadata
 
 
 def train_frozen_best_submission(
@@ -47,7 +70,9 @@ def train_frozen_best_submission(
     dataset_path: str | Path,
     token_stat_provider,
     artifact_dir: str | Path,
+    project_root: str | Path | None = None,
 ) -> dict[str, Any]:
+    assert_not_public_benchmark_training_path(dataset_path)
     dataset_root = Path(dataset_path)
     if not dataset_root.exists():
         raise FileNotFoundError(
@@ -117,7 +142,7 @@ def train_frozen_best_submission(
     entity_head.save(output_dir / "entity_specialist_head.json")
     long_head.save(output_dir / "long_specialist_head.json")
     metadata = {
-        **build_frozen_best_metadata(),
+        **build_frozen_best_metadata(project_root=project_root),
         "train_size": len(train_examples),
         "dev_size": len(dev_examples),
         "dev_pr_auc": dev_pr_auc,
@@ -173,6 +198,8 @@ def score_private_frozen_submission(
     token_stat_provider,
     bundle: FrozenSubmissionBundle | None = None,
     artifact_dir: str | Path | None = None,
+    output_mode: str = "probability",
+    label_threshold: float = DEFAULT_SERVING_THRESHOLD,
 ) -> dict[str, Any]:
     input_csv_path = Path(input_path)
     if not input_csv_path.exists():
@@ -185,6 +212,8 @@ def score_private_frozen_submission(
         if artifact_dir is None:
             raise ValueError("artifact_dir is required when bundle is not provided")
         bundle = load_frozen_submission_bundle(artifact_dir)
+    if output_mode not in {"probability", "boolean"}:
+        raise ValueError("output_mode must be either 'probability' or 'boolean'")
 
     extractor = _build_frozen_best_extractor()
     output_csv_path = Path(output_path)
@@ -192,6 +221,7 @@ def score_private_frozen_submission(
 
     with input_csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
+        assert_unlabeled_submission_input_columns(reader.fieldnames)
         rows = list(reader)
     if not rows:
         raise ValueError("private scoring input must not be empty")
@@ -243,7 +273,14 @@ def score_private_frozen_submission(
                 )
             ),
         )
-        scored_rows.append({**row, "hallucination_probability": probability})
+        scored_rows.append(
+            _format_scored_row(
+                row=row,
+                probability=probability,
+                output_mode=output_mode,
+                label_threshold=label_threshold,
+            )
+        )
 
     with output_csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(scored_rows[0].keys()))
@@ -252,6 +289,282 @@ def score_private_frozen_submission(
     return {
         "sample_size": len(scored_rows),
         "output_path": str(output_csv_path),
+        "metadata": bundle.metadata,
+    }
+
+
+def run_internal_ablation_report(
+    *,
+    dataset_path: str | Path,
+    token_stat_provider,
+    artifact_dir: str | Path,
+    report_dir: str | Path,
+    project_root: str | Path | None = None,
+) -> dict[str, Any]:
+    assert_not_public_benchmark_training_path(dataset_path)
+    examples = load_textual_training_dataset(dataset_path)
+    train_examples = [example for example in examples if example.split == "train"]
+    dev_examples = [example for example in examples if example.split == "dev"]
+    if not train_examples or not dev_examples:
+        raise ValueError("internal ablation requires both train and dev splits")
+
+    extractor = _build_frozen_best_extractor()
+    train_base_rows, train_specialist_rows, train_labels = _prepare_rows(
+        examples=train_examples,
+        extractor=extractor,
+        token_stat_provider=token_stat_provider,
+    )
+    dev_base_rows, dev_specialist_rows, dev_labels = _prepare_rows(
+        examples=dev_examples,
+        extractor=extractor,
+        token_stat_provider=token_stat_provider,
+    )
+
+    baseline_head = train_lightgbm_head(train_base_rows, train_labels)
+    numeric_head = train_lightgbm_head(
+        _select_historical_specialist_feature_subset(
+            specialist_rows=train_specialist_rows,
+            prefix="specialist_numeric_",
+        ),
+        train_labels,
+    )
+    entity_head = train_lightgbm_head(
+        _select_historical_specialist_feature_subset(
+            specialist_rows=train_specialist_rows,
+            prefix="specialist_entity_",
+        ),
+        train_labels,
+    )
+    long_head = train_lightgbm_head(
+        _select_historical_specialist_feature_subset(
+            specialist_rows=train_specialist_rows,
+            prefix="specialist_long_",
+        ),
+        train_labels,
+    )
+
+    baseline_scores = baseline_head.predict_proba_batch(dev_base_rows)
+    numeric_scores = numeric_head.predict_proba_batch(
+        _select_historical_specialist_feature_subset(
+            specialist_rows=dev_specialist_rows,
+            prefix="specialist_numeric_",
+        )
+    )
+    entity_scores = entity_head.predict_proba_batch(
+        _select_historical_specialist_feature_subset(
+            specialist_rows=dev_specialist_rows,
+            prefix="specialist_entity_",
+        )
+    )
+    long_scores = long_head.predict_proba_batch(
+        _select_historical_specialist_feature_subset(
+            specialist_rows=dev_specialist_rows,
+            prefix="specialist_long_",
+        )
+    )
+    full_blend_scores = [
+        _blend_probabilities(
+            baseline_score=baseline_score,
+            numeric_score=numeric_score,
+            entity_score=entity_score,
+            long_score=long_score,
+        )
+        for baseline_score, numeric_score, entity_score, long_score in zip(
+            baseline_scores,
+            numeric_scores,
+            entity_scores,
+            long_scores,
+        )
+    ]
+
+    variants = {
+        "baseline_only": _internal_variant_summary(dev_labels, baseline_scores),
+        "baseline_plus_numeric": _internal_variant_summary(
+            dev_labels,
+            [
+                (FROZEN_BLEND_WEIGHTS["baseline"] * baseline)
+                + (FROZEN_BLEND_WEIGHTS["numeric"] * numeric)
+                for baseline, numeric in zip(baseline_scores, numeric_scores)
+            ],
+        ),
+        "baseline_plus_entity": _internal_variant_summary(
+            dev_labels,
+            [
+                (FROZEN_BLEND_WEIGHTS["baseline"] * baseline)
+                + (FROZEN_BLEND_WEIGHTS["entity"] * entity)
+                for baseline, entity in zip(baseline_scores, entity_scores)
+            ],
+        ),
+        "baseline_plus_long": _internal_variant_summary(
+            dev_labels,
+            [
+                (FROZEN_BLEND_WEIGHTS["baseline"] * baseline)
+                + (FROZEN_BLEND_WEIGHTS["long"] * long_score)
+                for baseline, long_score in zip(baseline_scores, long_scores)
+            ],
+        ),
+        "full_blend": _internal_variant_summary(dev_labels, full_blend_scores),
+    }
+    best_variant = max(variants, key=lambda name: variants[name]["pr_auc"])
+    payload = {
+        "dataset_path": str(dataset_path),
+        "report_scope": "internal_validation_only",
+        "best_variant": best_variant,
+        "blend_metadata": build_frozen_best_metadata(project_root=project_root),
+        "variants": variants,
+    }
+    report_root = Path(report_dir)
+    json_report_path = write_json_artifact(
+        artifact_dir=report_root,
+        filename="ablation_report.json",
+        payload=payload,
+    )
+    markdown_report_path = write_markdown_artifact(
+        artifact_dir=report_root,
+        filename="ablation_report.md",
+        markdown=_build_ablation_markdown(payload),
+    )
+    return {
+        **payload,
+        "json_report_path": str(json_report_path),
+        "markdown_report_path": str(markdown_report_path),
+    }
+
+
+def benchmark_frozen_submission_latency(
+    *,
+    dataset_path: str | Path,
+    token_stat_provider,
+    artifact_dir: str | Path,
+    report_dir: str | Path,
+    sample_size: int,
+) -> dict[str, Any]:
+    bundle = load_frozen_submission_bundle(artifact_dir)
+    rows = _load_prompt_response_rows(dataset_path)
+    if not rows:
+        raise ValueError("latency benchmark dataset must not be empty")
+    selected_rows = rows[:sample_size]
+    extractor = _build_frozen_best_extractor()
+
+    provider_samples: list[float] = []
+    feature_samples: list[float] = []
+    specialist_samples: list[float] = []
+    blend_samples: list[float] = []
+    total_samples: list[float] = []
+
+    for row in selected_rows:
+        prompt = row["prompt"]
+        response = row["response"]
+
+        provider_start = __import__("time").perf_counter()
+        token_stats, internal_signal = _collect_signals(
+            token_stat_provider=token_stat_provider,
+            prompt=prompt,
+            response=response,
+        )
+        provider_samples.append((__import__("time").perf_counter() - provider_start) * 1000.0)
+
+        feature_start = __import__("time").perf_counter()
+        base_row = dict(
+            extractor.extract(
+                prompt=prompt,
+                response=response,
+                token_stats=token_stats,
+                internal_signal=internal_signal,
+            )
+        )
+        specialist_row = _extract_historical_specialist_features(
+            prompt=prompt,
+            response=response,
+            token_stats=token_stats,
+            internal_signal=internal_signal,
+        )
+        feature_samples.append((__import__("time").perf_counter() - feature_start) * 1000.0)
+
+        specialist_start = __import__("time").perf_counter()
+        baseline_score = bundle.baseline_head.predict_proba(base_row)
+        numeric_score = bundle.numeric_head.predict_proba(
+            _select_historical_specialist_feature_row(
+                specialist_row=specialist_row,
+                prefix="specialist_numeric_",
+            )
+        )
+        entity_score = bundle.entity_head.predict_proba(
+            _select_historical_specialist_feature_row(
+                specialist_row=specialist_row,
+                prefix="specialist_entity_",
+            )
+        )
+        long_score = bundle.long_head.predict_proba(
+            _select_historical_specialist_feature_row(
+                specialist_row=specialist_row,
+                prefix="specialist_long_",
+            )
+        )
+        specialist_samples.append((__import__("time").perf_counter() - specialist_start) * 1000.0)
+
+        blend_start = __import__("time").perf_counter()
+        _ = _blend_probabilities(
+            baseline_score=baseline_score,
+            numeric_score=numeric_score,
+            entity_score=entity_score,
+            long_score=long_score,
+        )
+        blend_samples.append((__import__("time").perf_counter() - blend_start) * 1000.0)
+
+        total_samples.append(
+            provider_samples[-1]
+            + feature_samples[-1]
+            + specialist_samples[-1]
+            + blend_samples[-1]
+        )
+
+    payload = {
+        "sample_size": len(selected_rows),
+        "provider_forward_ms": _latency_stats(provider_samples),
+        "feature_extraction_ms": _latency_stats(feature_samples),
+        "specialist_scoring_ms": _latency_stats(specialist_samples),
+        "blend_and_formatting_ms": _latency_stats(blend_samples),
+        "total_ms": _latency_stats(total_samples),
+        "metadata": bundle.metadata,
+    }
+    report_root = Path(report_dir)
+    json_report_path = write_json_artifact(
+        artifact_dir=report_root,
+        filename="latency_report.json",
+        payload=payload,
+    )
+    markdown_report_path = write_markdown_artifact(
+        artifact_dir=report_root,
+        filename="latency_report.md",
+        markdown=_build_latency_markdown(payload),
+    )
+    return {
+        **payload,
+        "json_report_path": str(json_report_path),
+        "markdown_report_path": str(markdown_report_path),
+    }
+
+
+def _format_scored_row(
+    *,
+    row: Mapping[str, Any],
+    probability: float,
+    output_mode: str,
+    label_threshold: float,
+) -> dict[str, Any]:
+    prompt = str(row.get("prompt", ""))
+    response = str(row.get("response") or row.get("model_answer") or "")
+    if output_mode == "boolean":
+        return {
+            "prompt": prompt,
+            "response": response,
+            "hallucination": "true" if probability >= label_threshold else "false",
+        }
+    return {
+        "prompt": prompt,
+        "response": response,
+        "hallucination_probability": probability,
     }
 
 
@@ -347,6 +660,92 @@ def _blend_probabilities(
         + (FROZEN_BLEND_WEIGHTS["numeric"] * numeric_score)
         + (FROZEN_BLEND_WEIGHTS["entity"] * entity_score)
         + (FROZEN_BLEND_WEIGHTS["long"] * long_score)
+    )
+
+
+def _internal_variant_summary(labels: list[int], probabilities: list[float]) -> dict[str, Any]:
+    metrics = _binary_metrics(labels, probabilities)
+    return {
+        "pr_auc": compute_pr_auc(labels, probabilities),
+        "precision": metrics["precision"],
+        "recall": metrics["recall"],
+        "predicted_positive_rate": metrics["predicted_positive_rate"],
+    }
+
+
+def _load_prompt_response_rows(path: str | Path) -> list[dict[str, str]]:
+    input_csv_path = Path(path)
+    if not input_csv_path.exists():
+        raise FileNotFoundError(f"dataset was not found: {input_csv_path}")
+    with input_csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        assert_unlabeled_submission_input_columns(reader.fieldnames)
+        rows = list(reader)
+    if not rows:
+        raise ValueError("dataset must not be empty")
+    normalized_rows: list[dict[str, str]] = []
+    for row in rows:
+        prompt = str(row.get("prompt", ""))
+        response = str(row.get("response") or row.get("model_answer") or "")
+        if not prompt:
+            raise ValueError("dataset must contain a prompt column")
+        if not response:
+            raise ValueError("dataset must contain response or model_answer values")
+        normalized_rows.append({"prompt": prompt, "response": response})
+    return normalized_rows
+
+
+def _latency_stats(samples_ms: list[float]) -> dict[str, float]:
+    ordered = sorted(samples_ms)
+    return {
+        "avg": _mean(ordered),
+        "p50": _quantile(ordered, 0.50),
+        "p95": _quantile(ordered, 0.95),
+        "p99": _quantile(ordered, 0.99),
+    }
+
+
+def _build_ablation_markdown(payload: dict[str, Any]) -> str:
+    lines = [
+        "# Ablation report",
+        "",
+        f"- scope: {payload['report_scope']}",
+        f"- best_variant: {payload['best_variant']}",
+        "",
+        "| Variant | PR-AUC | Precision | Recall | Predicted positive rate |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for name, summary in payload["variants"].items():
+        lines.append(
+            f"| {name} | {summary['pr_auc']:.4f} | {summary['precision']:.4f} | "
+            f"{summary['recall']:.4f} | {summary['predicted_positive_rate']:.4f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Short summary",
+            "",
+            "- This report uses only the internal train/dev split from the text-based training dataset.",
+            "- Public benchmark is not used for fit or weight selection here.",
+            "- Specialists that do not improve internal validation should be treated as optional in future iterations.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _build_latency_markdown(payload: dict[str, Any]) -> str:
+    return (
+        "# Latency report\n\n"
+        f"- sample_size: {payload['sample_size']}\n"
+        f"- avg total ms: {payload['total_ms']['avg']:.3f}\n"
+        f"- p50 total ms: {payload['total_ms']['p50']:.3f}\n"
+        f"- p95 total ms: {payload['total_ms']['p95']:.3f}\n"
+        f"- p99 total ms: {payload['total_ms']['p99']:.3f}\n\n"
+        "## Breakdown\n\n"
+        f"- provider forward avg ms: {payload['provider_forward_ms']['avg']:.3f}\n"
+        f"- feature extraction avg ms: {payload['feature_extraction_ms']['avg']:.3f}\n"
+        f"- specialist scoring avg ms: {payload['specialist_scoring_ms']['avg']:.3f}\n"
+        f"- blend and formatting avg ms: {payload['blend_and_formatting_ms']['avg']:.3f}\n"
     )
 
 
