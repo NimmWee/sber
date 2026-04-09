@@ -173,6 +173,8 @@ def score_private_frozen_submission(
     token_stat_provider,
     bundle: FrozenSubmissionBundle | None = None,
     artifact_dir: str | Path | None = None,
+    output_mode: str = "probability",
+    label_threshold: float = 0.3,
 ) -> dict[str, Any]:
     input_csv_path = Path(input_path)
     if not input_csv_path.exists():
@@ -185,6 +187,8 @@ def score_private_frozen_submission(
         if artifact_dir is None:
             raise ValueError("artifact_dir is required when bundle is not provided")
         bundle = load_frozen_submission_bundle(artifact_dir)
+    if output_mode not in {"probability", "boolean"}:
+        raise ValueError("output_mode must be 'probability' or 'boolean'")
 
     extractor = _build_frozen_best_extractor()
     output_csv_path = Path(output_path)
@@ -243,7 +247,15 @@ def score_private_frozen_submission(
                 )
             ),
         )
-        scored_rows.append({**row, "hallucination_probability": probability})
+        if output_mode == "boolean":
+            scored_rows.append(
+                {
+                    **row,
+                    "hallucination": "true" if probability >= float(label_threshold) else "false",
+                }
+            )
+        else:
+            scored_rows.append({**row, "hallucination_probability": probability})
 
     with output_csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(scored_rows[0].keys()))

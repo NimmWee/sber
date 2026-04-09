@@ -31,6 +31,16 @@ def main() -> None:
         "--output-path",
         default=str(PROJECT_ROOT / "data" / "bench" / "knowledge_bench_private_scores.csv"),
     )
+    parser.add_argument(
+        "--output-mode",
+        choices=("probability", "boolean"),
+        default="probability",
+    )
+    parser.add_argument(
+        "--label-threshold",
+        type=float,
+        default=0.3,
+    )
     args = parser.parse_args()
 
     config = resolve_transformers_provider_config(
@@ -43,11 +53,16 @@ def main() -> None:
         output_path=args.output_path,
         token_stat_provider=provider,
         artifact_dir=args.artifact_dir,
+        output_mode=args.output_mode,
+        label_threshold=args.label_threshold,
     )
 
     print(f"model={config.model_source}")
     print(f"sample_size={summary['sample_size']}")
     print(f"output={summary['output_path']}")
+    print(f"output_mode={args.output_mode}")
+    if args.output_mode == "boolean":
+        print(f"label_threshold={args.label_threshold}")
 
 
 if __name__ == "__main__":
